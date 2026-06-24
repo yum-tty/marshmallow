@@ -1,4 +1,4 @@
-// parser.ts | Markdown tokenizer (glamour port)
+import { emojiMap } from "./emoji"
 
 export type TokenType =
   | 'heading'
@@ -16,6 +16,14 @@ export type TokenType =
   | 'task_item'
   | 'task_checked'
   | 'task_unchecked'
+  | 'definition_list'
+  | 'definition_term'
+  | 'definition_description'
+  | 'footnote'
+  | 'footnote_list'
+  | 'footnote_link'
+  | 'footnote_backlink'
+  | 'emoji'
   | 'text'
   | 'softbreak'
   | 'hardbreak'
@@ -42,11 +50,13 @@ export interface Token {
   language?: string;
   alignment?: 'left' | 'center' | 'right' | 'none';
   startNumber?: number;
+  ref?: string;
+  backref?: string;
 }
 
 function isHorizontalRule(line: string): boolean {
   const trimmed = line.trim();
-  if (/^[-*_]{3,}$/.test(trimmed) && !/^[-*_]+ [^]/.test(trimmed)) {
+  if (/^[-*_]{3,}$/.test(trimmed)) {
     const char = trimmed[0]!;
     return trimmed.split('').every(c => c === char || c === ' ');
   }
@@ -72,13 +82,16 @@ function parseTableAlignment(sepLine: string): ('left' | 'center' | 'right' | 'n
   });
 }
 
+const emojiRegex = /:([a-zA-Z0-9_+-]+):/g
+
 export function parseInlineTokens(text: string): Token[] {
   const tokens: Token[] = [];
   let pos = 0;
 
   while (pos < text.length) {
-    // Images: ![alt](url "title")
-    const imgMatch = text.slice(pos).match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/);
+    const rest = text.slice(pos);
+
+    const imgMatch = rest.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/);
     if (imgMatch) {
       tokens.push({
         type: 'image',
@@ -91,8 +104,7 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    // Links: [text](url "title")
-    const linkMatch = text.slice(pos).match(/^\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/);
+    const linkMatch = rest.match(/^\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/);
     if (linkMatch) {
       tokens.push({
         type: 'link',
@@ -104,19 +116,33 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    // Code span: `code`
-    const codeMatch = text.slice(pos).match(/^`([^`]+)`/);
+    const footnoteLinkMatch = rest.match(/^\[\^([^\]]+)\]/);
+    if (footnoteLinkMatch) {
+      const ref = footnoteLinkMatch[1]!;
+      if (text.slice(pos + footnoteLinkMatch[0].length).startsWith(':')) {
+        pos += footnoteLinkMatch[0].length + 1;
+        continue;
+      }
+      tokens.push({
+        type: 'footnote_link',
+        content: ref,
+        ref,
+      });
+      pos += footnoteLinkMatch[0].length;
+      continue;
+    }
+
+    const codeMatch = rest.match(/^(`+)([^`]+)\1/);
     if (codeMatch) {
       tokens.push({
         type: 'codespan',
-        content: codeMatch[1]!,
+        content: codeMatch[2]!,
       });
       pos += codeMatch[0].length;
       continue;
     }
 
-    // Strong: **text** or __text__
-    const strongMatch = text.slice(pos).match(/^\*\*(.+?)\*\*|^__(.+?)__/);
+    const strongMatch = rest.match(/^\*\*(.+?)\*\*|^__(.+?)__/);
     if (strongMatch) {
       tokens.push({
         type: 'strong',
@@ -126,8 +152,7 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    // Emphasis: *text* or _text_
-    const emMatch = text.slice(pos).match(/^\*(.+?)\*|^_(.+?)_/);
+    const emMatch = rest.match(/^\*(.+?)\*|^_(.+?)_/);
     if (emMatch) {
       tokens.push({
         type: 'em',
@@ -137,8 +162,7 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    // Strikethrough: ~~text~~
-    const strikeMatch = text.slice(pos).match(/^~~(.+?)~~/);
+    const strikeMatch = rest.match(/^~~(.+?)~~/);
     if (strikeMatch) {
       tokens.push({
         type: 'strikethrough',
@@ -148,21 +172,42 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    // Hard break: two spaces at end of line or \
-    if (text.slice(pos).startsWith('  \n')) {
+    const emojiMatch = rest.match(/^:([a-zA-Z0-9_+-]+):/);
+    if (emojiMatch) {
+      const code = emojiMatch[1]!;
+      const unicode = emojiMap[code];
+      if (unicode) {
+        tokens.push({
+          type: 'emoji',
+          content: unicode,
+        });
+        pos += emojiMatch[0].length;
+        continue;
+      }
+    }
+
+    if (rest.startsWith('  \n')) {
       tokens.push({ type: 'hardbreak', content: '' });
       pos += 3;
       continue;
     }
-    if (text.slice(pos).startsWith('\\\n')) {
+    if (rest.startsWith('\\\n')) {
       tokens.push({ type: 'hardbreak', content: '' });
       pos += 2;
       continue;
     }
 
-    // Plain text - consume until next special character
+    if (rest.startsWith('\\') && pos + 1 < text.length) {
+      const nextChar = text[pos + 1]!;
+      if (nextChar === '*' || nextChar === '_' || nextChar === '[' || nextChar === ']' || nextChar === '(' || nextChar === ')' || nextChar === '\\' || nextChar === '`' || nextChar === '#' || nextChar === '+' || nextChar === '-') {
+        tokens.push({ type: 'text', content: nextChar });
+        pos += 2;
+        continue;
+      }
+    }
+
     let end = text.length;
-    for (const ch of ['!', '[', '`', '*', '_', '~']) {
+    for (const ch of ['!', '[', '`', '*', '_', '~', ':']) {
       const idx = text.indexOf(ch, pos + 1);
       if (idx !== -1 && idx < end) {
         end = idx;
@@ -183,18 +228,18 @@ export function tokenize(markdown: string): Token[] {
   const lines = markdown.split('\n');
   const tokens: Token[] = [];
   let i = 0;
+  let footnoteCounter = 0;
+  const footnoteDefs: Map<string, { content: string; number: number }> = new Map();
 
   while (i < lines.length) {
     const line = lines[i]!;
 
-    // Blank line
     if (line.trim() === '') {
       tokens.push({ type: 'blank_line', content: '' });
       i++;
       continue;
     }
 
-    // Fenced code block: ``` or ~~~
     const fenceMatch = line.match(/^(`{3,}|~{3,})(.*)$/);
     if (fenceMatch) {
       const fence = fenceMatch[1]!;
@@ -217,7 +262,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Indented code block (4 spaces or 1 tab)
     if (/^( {4}|\t)/.test(line)) {
       const codeLines: string[] = [];
       while (i < lines.length && (/^( {4}|\t)/.test(lines[i]!) || lines[i]!.trim() === '')) {
@@ -231,7 +275,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Heading: # through ######
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       tokens.push({
@@ -243,14 +286,12 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Horizontal rule
     if (isHorizontalRule(line)) {
       tokens.push({ type: 'thematic_break', content: '' });
       i++;
       continue;
     }
 
-    // Blockquote
     if (line.startsWith('>')) {
       const quoteLines: string[] = [];
       while (i < lines.length && (lines[i]!.startsWith('>') || (lines[i]!.trim() !== '' && quoteLines.length > 0))) {
@@ -273,7 +314,16 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Task list item: - [x] or - [ ]
+    const footnoteDefMatch = line.match(/^\[\^([^\]]+)\]:\s+(.*)$/);
+    if (footnoteDefMatch) {
+      const ref = footnoteDefMatch[1]!;
+      const content = footnoteDefMatch[2]!;
+      footnoteCounter++;
+      footnoteDefs.set(ref, { content, number: footnoteCounter });
+      i++;
+      continue;
+    }
+
     const taskMatch = line.match(/^(\s*)([-*+])\s+\[([ xX])\]\s+(.*)$/);
     if (taskMatch) {
       const checked = taskMatch[3]!.toLowerCase() === 'x';
@@ -288,7 +338,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Unordered list item
     const ulMatch = line.match(/^(\s*)([-*+])\s+(.*)$/);
     if (ulMatch) {
       const indent = ulMatch[1]!.length;
@@ -302,7 +351,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Ordered list item
     const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
     if (olMatch) {
       const indent = olMatch[1]!.length;
@@ -317,7 +365,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Table
     if (line.includes('|') && i + 1 < lines.length && /^\|?[\s\-:|]+\|?$/.test(lines[i + 1]!)) {
       const headerCells = line
         .replace(/^\|/, '')
@@ -328,7 +375,6 @@ export function tokenize(markdown: string): Token[] {
       const alignments = parseTableAlignment(lines[i + 1]!);
       const tableRows: Token[][] = [];
 
-      // Header row
       tableRows.push(
         headerCells.map((cell, idx) => ({
           type: 'table_cell' as TokenType,
@@ -337,9 +383,8 @@ export function tokenize(markdown: string): Token[] {
         }))
       );
 
-      i += 2; // skip header and separator
+      i += 2;
 
-      // Data rows
       while (i < lines.length && lines[i]!.includes('|') && lines[i]!.trim() !== '') {
         const rowLine = lines[i]!;
         const cells = rowLine
@@ -365,13 +410,37 @@ export function tokenize(markdown: string): Token[] {
           type: 'table_row' as TokenType,
           content: '',
           children: row,
-          // First row is header
         })),
       });
       continue;
     }
 
-    // HTML block (simple detection)
+    const dlTermMatch = line.match(/^([^:]\S.*)(?=\s*$)/);
+    const nextLine = i + 1 < lines.length ? lines[i + 1]! : '';
+    if (dlTermMatch && /^:\s+/.test(nextLine)) {
+      const defTokens: Token[] = [];
+      defTokens.push({
+        type: 'definition_term',
+        content: dlTermMatch[1]!,
+      });
+      i++;
+      while (i < lines.length && /^:\s+/.test(lines[i]!)) {
+        const defContent = lines[i]!.replace(/^:\s+/, '');
+        defTokens.push({
+          type: 'definition_description',
+          content: defContent,
+          children: parseInlineTokens(defContent),
+        });
+        i++;
+      }
+      tokens.push({
+        type: 'definition_list',
+        content: '',
+        children: defTokens,
+      });
+      continue;
+    }
+
     if (/^<(div|p|ul|ol|li|h[1-6]|table|thead|tbody|tr|td|th|pre|code|hr|br|img|blockquote)[\s>]/i.test(line)) {
       const htmlLines: string[] = [];
       const tagName = line.match(/^<(\w+)/)![1]!;
@@ -391,7 +460,6 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    // Paragraph - collect consecutive non-empty lines
     const paragraphLines: string[] = [];
     while (
       i < lines.length &&
@@ -405,13 +473,12 @@ export function tokenize(markdown: string): Token[] {
       !/^(\s*)([-*+])\s+/.test(lines[i]!) &&
       !/^(\s*)(\d+)\.\s+/.test(lines[i]!) &&
       !/^\|?[\s\-:|]+\|?$/.test(lines[i]!) &&
-      !/^( {4}|\t)/.test(lines[i]!)
+      !/^( {4}|\t)/.test(lines[i]!) &&
+      !/^\[\^[^\]]+\]:/.test(lines[i]!)
     ) {
       paragraphLines.push(lines[i]!);
       i++;
-      // If next line is blank, stop
       if (i < lines.length && lines[i]!.trim() === '') break;
-      // If next line starts a block element, stop
       if (i < lines.length && (
         lines[i]!.startsWith('#') ||
         lines[i]!.startsWith('>') ||
@@ -429,6 +496,25 @@ export function tokenize(markdown: string): Token[] {
         children: parseInlineTokens(paragraphLines.join(' ')),
       });
     }
+  }
+
+  if (footnoteDefs.size > 0) {
+    const footnoteTokens: Token[] = [];
+    const sortedDefs = [...footnoteDefs.entries()].sort((a, b) => a[1].number - b[1].number);
+    for (const [ref, def] of sortedDefs) {
+      footnoteTokens.push({
+        type: 'footnote',
+        content: def.content,
+        ref,
+        backref: `${def.number}`,
+        children: parseInlineTokens(def.content),
+      });
+    }
+    tokens.push({
+      type: 'footnote_list',
+      content: '',
+      children: footnoteTokens,
+    });
   }
 
   return tokens;

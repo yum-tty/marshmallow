@@ -1,7 +1,52 @@
-// index.ts | Cinnamon Marshmallow - glamour port
+export {
+  Renderer,
+  TermRenderer,
+  NewRenderer,
+  Render,
+  RenderWithStyle,
+  RenderWithEnvironmentConfig,
+} from "./renderer"
 
-export { Renderer, NewRenderer, Render, RenderWithStyle } from "./renderer"
-export type { StyleConfig, RendererConfig } from "./renderer"
+export type {
+  StylePrimitive,
+  StyleBlock,
+  StyleTask,
+  StyleCodeBlock,
+  StyleList,
+  StyleTable,
+  StyleConfig,
+  Options,
+  RendererConfig,
+  TermRendererOption,
+} from "./renderer"
+
+export {
+  cascadeStyle,
+  cascadeStyles,
+  cascadeStylePrimitives,
+  renderText,
+  formatToken,
+  makeHyperlink,
+  defaultStyleConfig,
+} from "./renderer"
+
+export {
+  WithBaseURL,
+  WithStandardStyle,
+  WithEnvironmentConfig,
+  WithStylePath,
+  WithStyles,
+  WithStylesFromJSONBytes,
+  WithStylesFromJSONFile,
+  WithWordWrap,
+  WithTableWrap,
+  WithInlineTableLinks,
+  WithPreservedNewLines,
+  WithEmoji,
+  WithChromaFormatter,
+  WithOptions,
+} from "./renderer"
+
 export {
   darkStyle,
   lightStyle,
