@@ -1,0 +1,43 @@
+{
+  "name": "cinnamon-marshmallow",
+  "version": "0.1.0",
+  "description": "Markdown rendering for the terminal. A TypeScript port of Glamour for Bun.",
+  "module": "src/index.ts",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "bun --watch src",
+    "typecheck": "bun run --bun tsc --noEmit"
+  },
+  "keywords": [
+    "markdown",
+    "terminal",
+    "render",
+    "glamour",
+    "bun"
+  ],
+  "author": "yum-tty",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yum-tty/marshmallow"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "dependencies": {
+    "caramel": "github:yum-tty/caramel"
+  }
+}
