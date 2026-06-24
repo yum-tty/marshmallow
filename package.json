@@ -1,5 +1,5 @@
 {
-  "name": "cinnamon-marshmallow",
+  "name": "marshmallow",
   "version": "0.1.0",
   "description": "Markdown rendering for the terminal. A TypeScript port of Glamour for Bun.",
   "module": "src/index.ts",
@@ -38,6 +38,6 @@
     "@types/bun": "latest"
   },
   "dependencies": {
-    "caramel": "github:yum-tty/caramel"
+    "caramel": "file:../caramel"
   }
 }
