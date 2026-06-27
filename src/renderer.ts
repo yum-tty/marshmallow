@@ -514,6 +514,7 @@ export class TermRenderer {
       case 'code_fence':
       case 'code_block': return this.renderCodeBlock(token, ctx)
       case 'thematic_break': return this.renderHorizontalRule(token, ctx)
+      case 'list': return this.renderList(token, ctx)
       case 'list_item':
       case 'ordered_list_item': return this.renderListItem(token, ctx)
       case 'task_checked':
@@ -703,6 +704,41 @@ export class TermRenderer {
     // Extract the visible content between newlines and style only that
     const inner = format.replace(/^\n+|\n+$/g, "")
     return "\n" + renderText(inner, cascaded) + "\n"
+  }
+
+  private renderList(token: Token, ctx: RenderContext): string {
+    const children = token.children ?? []
+    const results: string[] = []
+    let counter = token.ordered ? 1 : 0
+
+    for (const child of children) {
+      const childToken = { ...child }
+      if (token.ordered && childToken.type === 'list_item') {
+        childToken.type = 'ordered_list_item'
+        childToken.ordered = true
+        childToken.startNumber = counter
+      }
+      if (childToken.children && childToken.children.length > 0) {
+        const childList: Token = {
+          type: 'list',
+          content: '',
+          ordered: childToken.type === 'ordered_list_item',
+          children: childToken.children,
+        }
+        const nestedItems: string[] = []
+        if (childToken.type !== 'blank_line' && childToken.content) {
+          nestedItems.push(this.renderToken(childToken, ctx) ?? '')
+        }
+        nestedItems.push(this.renderList(childList, ctx))
+        results.push(nestedItems.join('\n'))
+      } else {
+        const rendered = this.renderToken(childToken, ctx)
+        if (rendered !== null) results.push(rendered)
+      }
+      if (token.ordered) counter++
+    }
+
+    return results.join('\n')
   }
 
   private renderListItem(token: Token, ctx: RenderContext): string {

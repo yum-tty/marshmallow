@@ -8,6 +8,7 @@ export type TokenType =
   | 'code_block'
   | 'html_block'
   | 'thematic_break'
+  | 'list'
   | 'list_item'
   | 'ordered_list_item'
   | 'table'
@@ -83,6 +84,129 @@ function parseTableAlignment(sepLine: string): ('left' | 'center' | 'right' | 'n
 }
 
 const emojiRegex = /:([a-zA-Z0-9_+-]+):/g
+
+const languageAliases: Record<string, string> = {
+  js: 'javascript',
+  ts: 'typescript',
+  jsx: 'jsx',
+  tsx: 'tsx',
+  py: 'python',
+  rb: 'ruby',
+  cs: 'csharp',
+  'c#': 'csharp',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  fish: 'bash',
+  docker: 'dockerfile',
+  'dockerfile': 'dockerfile',
+  yml: 'yaml',
+  toml: 'toml',
+  json5: 'json',
+  md: 'markdown',
+  rs: 'rust',
+  kt: 'kotlin',
+  'kts': 'kotlin',
+  fs: 'fsharp',
+  'f#': 'fsharp',
+  'objective-c': 'objectivec',
+  'objc': 'objectivec',
+  'c++': 'cpp',
+  'c': 'c',
+  go: 'go',
+  java: 'java',
+  php: 'php',
+  swift: 'swift',
+  sql: 'sql',
+  html: 'html',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  xml: 'xml',
+  graphql: 'graphql',
+  gql: 'graphql',
+  protobuf: 'protobuf',
+  proto: 'protobuf',
+  makefile: 'makefile',
+  cmake: 'cmake',
+  vim: 'vim',
+  lua: 'lua',
+  r: 'r',
+  matlab: 'matlab',
+  perl: 'perl',
+  wasm: 'wasm',
+  text: 'text',
+  plaintext: 'text',
+  'plain text': 'text',
+}
+
+function normalizeLanguage(lang: string): string {
+  const lower = lang.toLowerCase().trim()
+  return languageAliases[lower] ?? lower
+}
+
+function isListItem(t: Token): t is Token & { indent: number } {
+  return t.type === 'list_item' || t.type === 'ordered_list_item' || t.type === 'task_checked' || t.type === 'task_unchecked'
+}
+
+function buildNestedListTokens(tokens: Token[]): Token[] {
+  const result: Token[] = []
+  let i = 0
+
+  while (i < tokens.length) {
+    if (!isListItem(tokens[i]!)) {
+      result.push(tokens[i]!)
+      i++
+      continue
+    }
+
+    const listItems: { token: Token; indent: number; children: any[] }[] = []
+    while (i < tokens.length && (isListItem(tokens[i]!) || (tokens[i]!.type === 'blank_line' && i + 1 < tokens.length && isListItem(tokens[i + 1]!)))) {
+      if (tokens[i]!.type === 'blank_line') {
+        i++
+        continue
+      }
+      const item = tokens[i]!
+      listItems.push({ token: item, indent: item.indent ?? 0, children: [] })
+      i++
+    }
+
+    const root: any[] = []
+    const stack: { indent: number; children: any[] }[] = [{ indent: -1, children: root }]
+
+    for (const item of listItems) {
+      while (stack.length > 1 && stack[stack.length - 1]!.indent >= item.indent) {
+        stack.pop()
+      }
+      const entry = { ...item, children: [] }
+      stack[stack.length - 1]!.children.push(entry)
+      stack.push({ indent: item.indent, children: entry.children })
+    }
+
+    function toTokens(entries: any[]): Token[] {
+      return entries.map((e: any) => {
+        const children = toTokens(e.children)
+        if (children.length > 0) {
+          return { ...e.token, children }
+        }
+        return e.token
+      })
+    }
+
+    const nestedItems = toTokens(root)
+    const firstType = listItems[0]!.token.type
+    const isOrdered = firstType === 'ordered_list_item'
+
+    result.push({
+      type: 'list',
+      content: '',
+      ordered: isOrdered,
+      children: nestedItems,
+    })
+  }
+
+  return result
+}
 
 export function parseInlineTokens(text: string): Token[] {
   const tokens: Token[] = [];
@@ -243,7 +367,8 @@ export function tokenize(markdown: string): Token[] {
     const fenceMatch = line.match(/^(`{3,}|~{3,})(.*)$/);
     if (fenceMatch) {
       const fence = fenceMatch[1]!;
-      const language = fenceMatch[2]!.trim();
+      const rawLanguage = fenceMatch[2]!.trim();
+      const language = rawLanguage ? normalizeLanguage(rawLanguage) : undefined;
       const codeLines: string[] = [];
       i++;
       while (i < lines.length) {
@@ -257,7 +382,7 @@ export function tokenize(markdown: string): Token[] {
       tokens.push({
         type: 'code_fence',
         content: codeLines.join('\n'),
-        language: language || undefined,
+        language,
       });
       continue;
     }
@@ -426,12 +551,23 @@ export function tokenize(markdown: string): Token[] {
       i++;
       while (i < lines.length && /^:\s+/.test(lines[i]!)) {
         const defContent = lines[i]!.replace(/^:\s+/, '');
+        const descChildren: string[] = [defContent];
+        i++;
+        while (i < lines.length && lines[i]!.trim() !== '' && !/^:\s+/.test(lines[i]!) && !/^([^:]\S.*)(?=\s*$)/.test(lines[i]!) && !isHorizontalRule(lines[i]!)) {
+          if (/^(\s*)([-*+])\s+/.test(lines[i]!) || /^(\s*)(\d+)\.\s+/.test(lines[i]!)) break;
+          if (/^#{1,6}\s+/.test(lines[i]!)) break;
+          if (lines[i]!.startsWith('>')) break;
+          if (/^(`{3,}|~{3,})/.test(lines[i]!)) break;
+          if (/^\|/.test(lines[i]!)) break;
+          descChildren.push(lines[i]!.trim());
+          i++;
+        }
+        const joined = descChildren.join(' ');
         defTokens.push({
           type: 'definition_description',
-          content: defContent,
-          children: parseInlineTokens(defContent),
+          content: joined,
+          children: parseInlineTokens(joined),
         });
-        i++;
       }
       tokens.push({
         type: 'definition_list',
@@ -517,5 +653,5 @@ export function tokenize(markdown: string): Token[] {
     });
   }
 
-  return tokens;
+  return buildNestedListTokens(tokens);
 }
