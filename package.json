@@ -38,6 +38,7 @@
     "@types/bun": "latest"
   },
   "dependencies": {
-    "caramel": "file:../caramel"
+    "caramel": "file:../caramel",
+    "shiki": "^4.3.0"
   }
 }

@@ -3,6 +3,7 @@ export {
   TermRenderer,
   NewRenderer,
   Render,
+  Plain,
   RenderWithStyle,
   RenderWithEnvironmentConfig,
 } from "./renderer"
@@ -18,6 +19,7 @@ export type {
   Options,
   RendererConfig,
   TermRendererOption,
+  Chroma,
 } from "./renderer"
 
 export {
@@ -55,7 +57,18 @@ export {
   pinkStyle,
   draculaStyle,
   tokyoNightStyle,
+  DefaultStyles,
 } from "./renderer"
 
 export { tokenize, parseInlineTokens } from "./parser"
 export type { Token, TokenType } from "./parser"
+export {
+  applyMargin,
+  applyPadding,
+  applyIndent,
+  NewMarginWriter,
+  NewPaddingWriter,
+  NewIndentWriter,
+  type PadFunc,
+  type IndentFunc,
+} from "./margin"

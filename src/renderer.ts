@@ -12,6 +12,50 @@ function htmlUnescape(str: string): string {
     .replace(/&#39;/g, "'")
 }
 
+function sanitizeHtml(s: string, trimSpaces: boolean): string {
+  s = s.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  s = s.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+  s = s.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '')
+  s = s.replace(/<embed[^>]*\/?>/gi, '')
+  s = s.replace(/<applet[^>]*>[\s\S]*?<\/applet>/gi, '')
+  if (trimSpaces) s = s.trim()
+  return htmlUnescape(s)
+}
+
+const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/g
+
+function autolink(text: string): string {
+  return text.replace(URL_REGEX, (url) => {
+    const clean = url.replace(/[.,;:!?]+$/, '')
+    if (clean.length < 4) return url
+    return `[${clean}](${clean})`
+  })
+}
+
+function truncateWithEllipsis(str: string, maxWidth: number): string {
+  const w = getStringWidth(str)
+  if (w <= maxWidth) return str
+  let result = ''
+  let width = 0
+  for (const char of str) {
+    const code = char.codePointAt(0)!
+    const cw = (code >= 0x1100 && code <= 0x115F) || (code >= 0x2E80 && code <= 0x303E) ||
+      (code >= 0x3040 && code <= 0x33BF) || (code >= 0x3400 && code <= 0x4DBF) ||
+      (code >= 0x4E00 && code <= 0x9FFF) || (code >= 0xA000 && code <= 0xA4CF) ||
+      (code >= 0xAC00 && code <= 0xD7AF) || (code >= 0xF900 && code <= 0xFAFF) ||
+      (code >= 0xFE10 && code <= 0xFE19) || (code >= 0xFE30 && code <= 0xFE6F) ||
+      (code >= 0xFF00 && code <= 0xFF60) || (code >= 0xFFE0 && code <= 0xFFE6) ||
+      (code >= 0x20000 && code <= 0x2FFFD) || (code >= 0x30000 && code <= 0x3FFFD) ? 2 : 1
+    if (width + cw + 2 > maxWidth) {
+      result += '...'
+      break
+    }
+    result += char
+    width += cw
+  }
+  return result
+}
+
 function getStringWidth(str: string): number {
   let width = 0
   let inEscape = false
@@ -64,6 +108,7 @@ import {
   type StyleList,
   type StyleTable,
   type StyleConfig,
+  type Chroma,
   cascadeStyle,
   cascadeStyles,
   cascadeStylePrimitives,
@@ -71,10 +116,18 @@ import {
   renderText,
   formatToken,
   defaultStyleConfig,
+  darkStyle,
+  lightStyle,
+  asciiStyle,
+  nottyStyle,
+  pinkStyle,
+  draculaStyle,
+  tokyoNightStyle,
+  DefaultStyles,
 } from "./style"
 
-export type { StylePrimitive, StyleBlock, StyleTask, StyleCodeBlock, StyleList, StyleTable, StyleConfig }
-export { cascadeStyle, cascadeStyles, cascadeStylePrimitives, renderText, formatToken, defaultStyleConfig }
+export type { StylePrimitive, StyleBlock, StyleTask, StyleCodeBlock, StyleList, StyleTable, StyleConfig, Chroma }
+export { cascadeStyle, cascadeStyles, cascadeStylePrimitives, renderText, formatToken, defaultStyleConfig, darkStyle, lightStyle, asciiStyle, nottyStyle, pinkStyle, draculaStyle, tokyoNightStyle, DefaultStyles }
 
 const defaultWidth = 80
 
@@ -164,11 +217,11 @@ export function makeHyperlink(link: string): [string, string, boolean] {
     const url = new URL(link)
     if ("#" + url.hash === link) return ["", "", false]
     const id = `id=${simpleHash(link)}`
-    return [`\x1b]8;;${link}\x07`, `\x1b]8;;\x07`, true]
+    return [`\x1b]8;${id};${link}\x1b\\`, `\x1b]8;;\x1b\\`, true]
   } catch {
     if (link.startsWith("#")) return ["", "", false]
     const id = `id=${simpleHash(link)}`
-    return [`\x1b]8;;${link}\x07`, `\x1b]8;;\x07`, true]
+    return [`\x1b]8;${id};${link}\x1b\\`, `\x1b]8;;\x1b\\`, true]
   }
 }
 
@@ -202,6 +255,7 @@ export interface Options {
   preserveNewLines: boolean
   styles: StyleConfig
   chromaFormatter: string
+  emoji: boolean
 }
 
 function defaultOptions(): Options {
@@ -213,6 +267,7 @@ function defaultOptions(): Options {
     preserveNewLines: false,
     styles: deepCopyStyleConfig(defaultStyleConfig),
     chromaFormatter: "",
+    emoji: false,
   }
 }
 
@@ -257,9 +312,12 @@ export function WithStylesFromJSONBytes(jsonBytes: string): TermRendererOption {
   }
 }
 
-export function WithStylesFromJSONFile(_filename: string): TermRendererOption {
-  return (_tr) => {
-    // File I/O requires async context; use WithStylesFromJSONBytes for sync usage
+export function WithStylesFromJSONFile(filename: string): TermRendererOption {
+  return (tr) => {
+    const fs = (globalThis as any).require("fs") as { readFileSync: (p: string, enc: string) => string }
+    const jsonBytes = fs.readFileSync(filename, "utf-8")
+    const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
+    Object.assign(tr.options.styles, parsed)
   }
 }
 
@@ -280,7 +338,7 @@ export function WithPreservedNewLines(): TermRendererOption {
 }
 
 export function WithEmoji(): TermRendererOption {
-  return () => {}
+  return (tr) => { tr.options.emoji = true }
 }
 
 export function WithChromaFormatter(formatter: string): TermRendererOption {
@@ -392,6 +450,62 @@ export class TermRenderer {
     return result.join("\n")
   }
 
+  renderBytes(in_: Uint8Array): Uint8Array {
+    const str = new TextDecoder().decode(in_)
+    const out = this.render(str)
+    return new TextEncoder().encode(out)
+  }
+
+  async renderAsync(in_: string): Promise<string> {
+    const ctx: RenderContext = {
+      options: this.options,
+      blockStack: new BlockStack(),
+      tableLinks: [],
+      tableImages: [],
+      footnotes: [],
+      footnoteMap: new Map(),
+    }
+
+    ctx.blockStack.push({
+      block: "",
+      style: ctx.options.styles.document,
+      margin: false,
+      newline: false,
+    })
+
+    const tokens = tokenize(in_)
+
+    let footnoteIdx = 0
+    for (const t of tokens) {
+      if (t.type === "footnote_list") {
+        ctx.footnotes = t.children ?? []
+        for (let fi = 0; fi < ctx.footnotes.length; fi++) {
+          const fn = ctx.footnotes[fi]!
+          if (fn.ref) ctx.footnoteMap.set(fn.ref, fi + 1)
+        }
+      }
+    }
+
+    const result: string[] = []
+
+    for (let idx = 0; idx < tokens.length; idx++) {
+      const token = tokens[idx]!
+      if (token.type === "footnote_list") continue
+      const rendered = await this.renderTokenAsync(token, ctx)
+      if (rendered !== null) {
+        result.push(rendered)
+      }
+    }
+
+    if (ctx.footnotes.length > 0) {
+      const rendered = this.renderFootnoteList(ctx)
+      if (rendered) result.push(rendered)
+    }
+
+    ctx.blockStack.pop()
+    return result.join("\n")
+  }
+
   private renderToken(token: Token, ctx: RenderContext): string | null {
     switch (token.type) {
       case 'heading': return this.renderHeading(token, ctx)
@@ -411,10 +525,17 @@ export class TermRenderer {
       case 'footnote': return this.renderFootnote(token, ctx)
       case 'footnote_link': return this.renderFootnoteLink(token, ctx)
       case 'footnote_backlink': return this.renderFootnoteBacklink(token, ctx)
-      case 'html_block': return token.content.replace(/<[^>]+>/g, '')
+      case 'html_block': return sanitizeHtml(token.content, true)
       case 'blank_line': return ''
       default: return null
     }
+  }
+
+  private async renderTokenAsync(token: Token, ctx: RenderContext): Promise<string | null> {
+    if (token.type === 'code_fence' || token.type === 'code_block') {
+      return await this.renderCodeBlockAsync(token, ctx)
+    }
+    return this.renderToken(token, ctx)
   }
 
   private renderHeading(token: Token, ctx: RenderContext): string {
@@ -437,7 +558,7 @@ export class TermRenderer {
     const text = htmlUnescape(token.content)
     let result = "\n"
     if (rules.blockPrefix) result += renderText(rules.blockPrefix, parentStyle)
-    const styled = styleToCaramel(cascaded).render(rules.prefix + text + (rules.suffix ?? ""))
+    const styled = styleToCaramel(cascaded).render((rules.prefix ?? "") + text + (rules.suffix ?? ""))
     result += styled
     if (rules.blockSuffix) result += renderText(rules.blockSuffix, cascaded)
 
@@ -510,26 +631,65 @@ export class TermRenderer {
     const cs = ctx.blockStack.current()
     const cascaded = cascadeStyle(cs.style, rules, false)
 
-    const codeLines = token.content.split("\n")
-    const maxLineLen = Math.max(...codeLines.map(l => getStringWidth(l)), 0)
-    const langLabel = token.language ? ` ${token.language} ` : ''
-    const border = '─'.repeat(maxLineLen + 2)
+    const indent = rules.indent ?? 0
+    const margin = rules.margin ?? 0
+    const indentStr = " ".repeat(indent + margin)
 
+    const codeLines = token.content.split("\n")
     const codeStyle = styleToCaramel(cascaded)
     const result: string[] = []
-    result.push(codeStyle.render('┌' + border + '┐'))
-
-    if (langLabel) {
-      const labelStyle = styleToCaramel(s.code)
-      result.push(codeStyle.render('│ ' + labelStyle.render(langLabel) + ' '.repeat(maxLineLen - getStringWidth(langLabel) + 1) + '│'))
-    }
 
     for (const line of codeLines) {
-      const padded = line.padEnd(maxLineLen)
-      result.push(codeStyle.render('│ ' + padded + ' │'))
+      result.push(indentStr + codeStyle.render(line))
     }
 
-    result.push(codeStyle.render('└' + border + '┘'))
+    return result.join("\n")
+  }
+
+  private async renderCodeBlockAsync(token: Token, ctx: RenderContext): Promise<string> {
+    const s = ctx.options.styles
+    const rules = s.codeBlock
+    const cs = ctx.blockStack.current()
+    const cascaded = cascadeStyle(cs.style, rules, false)
+
+    const indent = rules.indent ?? 0
+    const margin = rules.margin ?? 0
+    const indentStr = " ".repeat(indent + margin)
+
+    const code = token.content
+    const lang = token.language
+
+    let highlightedLines: string[]
+    if (lang) {
+      try {
+        const { codeToTokens } = await import("shiki")
+        const tokens = await codeToTokens(code, { lang: lang as any, theme: "dracula" })
+        highlightedLines = tokens.tokens.map((line) => {
+          let ansi = ""
+          for (const tok of line) {
+            if (tok.color) {
+              const r = parseInt(tok.color.slice(1, 3), 16)
+              const g = parseInt(tok.color.slice(3, 5), 16)
+              const b = parseInt(tok.color.slice(5, 7), 16)
+              ansi += `\x1b[38;2;${r};${g};${b}m${tok.content}`
+            } else {
+              ansi += tok.content
+            }
+          }
+          return ansi + "\x1b[0m"
+        })
+      } catch {
+        highlightedLines = code.split("\n")
+      }
+    } else {
+      highlightedLines = code.split("\n")
+    }
+
+    const result: string[] = []
+    for (const line of highlightedLines) {
+      result.push(indentStr + line)
+    }
+
     return result.join("\n")
   }
 
@@ -540,7 +700,9 @@ export class TermRenderer {
     const cascaded = cascadeStyle(cs.style, rules, false)
 
     let format = rules.format ?? "\n--------\n"
-    return renderText(format, cascaded)
+    // Extract the visible content between newlines and style only that
+    const inner = format.replace(/^\n+|\n+$/g, "")
+    return "\n" + renderText(inner, cascaded) + "\n"
   }
 
   private renderListItem(token: Token, ctx: RenderContext): string {
@@ -612,6 +774,8 @@ export class TermRenderer {
     const colSep = tableRules.columnSeparator ?? "│"
     const rowSep = tableRules.rowSeparator ?? "─"
 
+    // In glamour, ALL outer borders are disabled (BorderTop/Left/Right/Bottom = false).
+    // Only internal separators are visible: colSep between columns, rowSep for row lines.
     const sepLine = colWidths.map(w => rowSep.repeat(w + 2)).join(centerSep)
     const result: string[] = []
 
@@ -621,22 +785,23 @@ export class TermRenderer {
 
       for (let c = 0; c < colCount; c++) {
         const cellText = row[c] ?? ''
+        const truncated = truncateWithEllipsis(cellText, colWidths[c]!)
         const align = alignments[c] ?? 'none'
         const padded = align === 'center'
-          ? padCenter(cellText, colWidths[c]!)
+          ? padCenter(truncated, colWidths[c]!)
           : align === 'right'
-          ? padLeft(cellText, colWidths[c]!)
-          : padRight(cellText, colWidths[c]!)
+          ? padLeft(truncated, colWidths[c]!)
+          : padRight(truncated, colWidths[c]!)
         cells.push(' ' + padded + ' ')
       }
 
       const rowStr = cells.join(colSep)
       if (r === 0) {
         const headerStyle = cascadeStyle(cascaded, ctx.options.styles.strong, false)
-        result.push(styleToCaramel(headerStyle).render(colSep + rowStr + colSep))
+        result.push(styleToCaramel(headerStyle).render(rowStr))
         result.push(styleToCaramel(cascaded).render(sepLine))
       } else {
-        result.push(styleToCaramel(cascaded).render(colSep + rowStr + colSep))
+        result.push(styleToCaramel(cascaded).render(rowStr))
       }
     }
 
@@ -759,9 +924,18 @@ export class TermRenderer {
 
     for (const token of tokens) {
       switch (token.type) {
-        case 'text':
-          result += htmlUnescape(token.content)
+        case 'text': {
+          const text = htmlUnescape(token.content)
+          const autolinked = autolink(text)
+          if (autolinked !== text) {
+            const linkStyle = cascadeStyle(cs.style, s.link, false)
+            const parsed = parseInlineTokens(autolinked)
+            result += this.renderInlineTokens(parsed, ctx)
+          } else {
+            result += text
+          }
           break
+        }
         case 'strong': {
           const style = cascadeStyle(cs.style, s.strong, false)
           result += styleToCaramel(style).render(token.content)
@@ -787,10 +961,18 @@ export class TermRenderer {
         case 'link': {
           const hyperlink = makeHyperlink(token.href ?? "")
           const linkText = token.content
+          const url = token.href ?? ""
 
           const textStyle = cascadeStyle(cs.style, s.linkText, false)
+          const urlStyle = cascadeStyle(cs.style, s.link, false)
 
-          result += styleToCaramel(textStyle).render(hyperlink[0] + linkText + hyperlink[1])
+          // Text part (bold green)
+          result += hyperlink[0] + styleToCaramel(textStyle).render(linkText) + hyperlink[1]
+          // URL part (underlined, gray)
+          if (url && !url.startsWith("#")) {
+            result += " "
+            result += hyperlink[0] + styleToCaramel(urlStyle).render(url) + hyperlink[1]
+          }
           break
         }
         case 'image': {
@@ -808,10 +990,10 @@ export class TermRenderer {
 
           if (hyperlink[2]) {
             if (text) {
-              result += styleToCaramel(textStyle).render(hyperlink[0] + formattedText + hyperlink[1])
+              result += hyperlink[0] + styleToCaramel(textStyle).render(formattedText) + hyperlink[1]
             }
             result += " "
-            result += styleToCaramel(urlStyle).render(hyperlink[0] + resolved + hyperlink[1])
+            result += hyperlink[0] + styleToCaramel(urlStyle).render(resolved) + hyperlink[1]
           } else {
             if (text) {
               result += styleToCaramel(textStyle).render(formattedText)
@@ -849,6 +1031,29 @@ export class TermRenderer {
     return result
   }
 
+  read(buf: Uint8Array): number {
+    const chunk = this._renderBuf.slice(this._renderBufOffset, this._renderBufOffset + buf.length)
+    chunk.forEach((v, i) => { buf[i] = v })
+    this._renderBufOffset += chunk.length
+    return chunk.length
+  }
+
+  write(data: Uint8Array): number {
+    const arr = new Uint8Array(this._writeBuf.length + data.length)
+    arr.set(this._writeBuf)
+    arr.set(data, this._writeBuf.length)
+    this._writeBuf = arr
+    return data.length
+  }
+
+  close(): void {
+    const str = new TextDecoder().decode(this._writeBuf)
+    const out = this.render(str)
+    this._renderBuf = new TextEncoder().encode(out)
+    this._renderBufOffset = 0
+    this._writeBuf = new Uint8Array(0)
+  }
+
   setWidth(width: number): void {
     this.options.wordWrap = width
   }
@@ -856,6 +1061,10 @@ export class TermRenderer {
   setStyle(style: StyleConfig): void {
     this.options.styles = style
   }
+
+  private _writeBuf = new Uint8Array(0)
+  private _renderBuf = new Uint8Array(0)
+  private _renderBufOffset = 0
 }
 
 function padRight(str: string, targetLen: number): string {
@@ -879,7 +1088,6 @@ function padCenter(str: string, targetLen: number): string {
   return ' '.repeat(left) + str + ' '.repeat(right)
 }
 
-const defaultImageFormat = "Image: {{.text}} →"
 
 function mapStyleConfig(src: Record<string, any>): StyleConfig {
   const dst = deepCopyStyleConfig(defaultStyleConfig)
@@ -952,6 +1160,18 @@ function mapStyleConfig(src: Record<string, any>): StyleConfig {
   if (src.code_block) {
     const cb = mapBlock(src.code_block)
     dst.codeBlock = { ...cb, theme: src.code_block.Theme }
+    if (src.code_block.Chroma) {
+      const chroma: Chroma = {}
+      const c = src.code_block.Chroma
+      for (const key of Object.keys(c)) {
+        const k = key as string
+        const v = (c as any)[k]
+        if (v && typeof v === 'object') {
+          (chroma as any)[k] = mapPrimitive(v)
+        }
+      }
+      dst.codeBlock.chroma = chroma
+    }
   }
   if (src.definition_list) dst.definitionList = mapBlock(src.definition_list)
   if (src.definition_term) dst.definitionTerm = mapPrimitive(src.definition_term)
@@ -983,146 +1203,6 @@ function mapStyleConfig(src: Record<string, any>): StyleConfig {
   return dst
 }
 
-export const darkStyle: StyleConfig = deepCopyStyleConfig(defaultStyleConfig)
-
-export const lightStyle: StyleConfig = (() => {
-  const s = deepCopyStyleConfig(defaultStyleConfig)
-  s.document.color = "234"
-  s.heading.color = "27"
-  s.h6.bold = false
-  s.horizontalRule.color = "249"
-  s.link.color = "36"
-  s.linkText.color = "29"
-  s.image.color = "205"
-  s.imageText.color = "243"
-  s.code.color = "203"
-  s.code.backgroundColor = "254"
-  s.codeBlock.color = "242"
-  return s
-})()
-
-export const asciiStyle: StyleConfig = (() => {
-  const s = deepCopyStyleConfig(defaultStyleConfig)
-  s.document.blockPrefix = "\n"
-  s.document.blockSuffix = "\n"
-  s.document.margin = 2
-  s.blockquote.indent = 1
-  s.blockquote.indentToken = "| "
-  s.heading.blockSuffix = "\n"
-  s.heading.color = undefined
-  s.heading.bold = undefined
-  s.h1.prefix = "# "
-  s.h2.prefix = "## "
-  s.h3.prefix = "### "
-  s.h4.prefix = "#### "
-  s.h5.prefix = "##### "
-  s.h6.prefix = "###### "
-  s.h1.color = undefined
-  s.h1.backgroundColor = undefined
-  s.h1.bold = undefined
-  s.h2.color = undefined
-  s.h3.color = undefined
-  s.h4.color = undefined
-  s.h5.color = undefined
-  s.h6.color = undefined
-  s.strikethrough = { crossedOut: true }
-  s.emph = { italic: true }
-  s.strong = { bold: true }
-  s.horizontalRule = { format: "\n--------\n" }
-  s.item = { blockPrefix: "• " }
-  s.enumeration = { blockPrefix: ". " }
-  s.link = {}
-  s.linkText = {}
-  s.image = {}
-  s.imageText = { format: defaultImageFormat }
-  s.code = {}
-  s.codeBlock = { margin: 2 }
-  s.table = {}
-  s.definitionDescription = { blockPrefix: "\n* " }
-  return s
-})()
-
-export const nottyStyle: StyleConfig = asciiStyle
-
-export const pinkStyle: StyleConfig = (() => {
-  const s = deepCopyStyleConfig(defaultStyleConfig)
-  s.document.margin = 2
-  s.blockquote.indent = 1
-  s.blockquote.indentToken = "│ "
-  s.heading.color = "212"
-  s.h1.blockSuffix = "\n"
-  s.h1.blockPrefix = "\n"
-  s.h1.prefix = ""
-  s.h2.prefix = "▌ "
-  s.h3.prefix = "┃ "
-  s.h4.prefix = "│ "
-  s.h5.prefix = "┆ "
-  s.h6.prefix = "┊ "
-  s.h6.bold = false
-  s.horizontalRule = { color: "212", format: "\n──────\n" }
-  s.link.color = "99"
-  s.linkText.bold = true
-  s.image.underline = true
-  s.imageText.format = "Image: {{.text}}"
-  s.code.color = "212"
-  s.code.backgroundColor = "236"
-  s.definitionDescription = { blockPrefix: "\n🠶 " }
-  return s
-})()
-
-export const draculaStyle: StyleConfig = (() => {
-  const s = deepCopyStyleConfig(defaultStyleConfig)
-  s.document.color = "252"
-  s.blockquote.color = "228"
-  s.blockquote.italic = true
-  s.heading.color = "99"
-  s.h1.color = "99"
-  s.h2.color = "99"
-  s.h3.color = "99"
-  s.h4.color = "99"
-  s.h5.color = "99"
-  s.h6.color = "99"
-  s.horizontalRule.color = "61"
-  s.link.color = "117"
-  s.link.underline = true
-  s.linkText.color = "212"
-  s.emph = { italic: true, color: "228" }
-  s.strong = { bold: true, color: "215" }
-  s.strikethrough = { crossedOut: true }
-  s.code.color = "84"
-  s.codeBlock.color = "215"
-  s.list.color = "252"
-  s.enumeration.color = "117"
-  s.table.color = "99"
-  s.h6.bold = false
-  return s
-})()
-
-export const tokyoNightStyle: StyleConfig = (() => {
-  const s = deepCopyStyleConfig(defaultStyleConfig)
-  s.document.color = "140"
-  s.blockquote.color = "61"
-  s.heading.color = "141"
-  s.h1.color = "141"
-  s.h2.color = "141"
-  s.h3.color = "141"
-  s.h4.color = "141"
-  s.h5.color = "141"
-  s.h6.color = "141"
-  s.horizontalRule.color = "61"
-  s.link.color = "110"
-  s.link.underline = true
-  s.linkText.color = "74"
-  s.strikethrough = { crossedOut: true }
-  s.code.color = "108"
-  s.codeBlock.color = "209"
-  s.list.color = "140"
-  s.enumeration.color = "110"
-  s.table.color = "141"
-  s.h6.bold = false
-  return s
-})()
-
 export interface RendererConfig {
   width?: number
   style?: StyleConfig
@@ -1142,6 +1222,10 @@ export class Renderer {
     return this.renderer.render(markdown)
   }
 
+  async renderAsync(markdown: string): Promise<string> {
+    return await this.renderer.renderAsync(markdown)
+  }
+
   setWidth(width: number): void {
     this.renderer.options.wordWrap = width
   }
@@ -1155,9 +1239,14 @@ export function NewRenderer(config?: RendererConfig): Renderer {
   return new Renderer(config)
 }
 
-export function Render(markdown: string, config?: RendererConfig): string {
+export function Plain(markdown: string, config?: RendererConfig): string {
   const renderer = new Renderer(config)
   return renderer.render(markdown)
+}
+
+export async function Render(markdown: string, config?: RendererConfig): Promise<string> {
+  const renderer = new Renderer(config)
+  return await renderer.renderAsync(markdown)
 }
 
 export function RenderWithStyle(markdown: string, style: StyleConfig): string {
