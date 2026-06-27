@@ -421,8 +421,8 @@ export function tokenize(markdown: string): Token[] {
       const quoteLines: string[] = [];
       while (i < lines.length && (lines[i]!.startsWith('>') || (lines[i]!.trim() !== '' && quoteLines.length > 0))) {
         if (lines[i]!.startsWith('>')) {
-          const content = lines[i]!.replace(/^>\s?/, '');
-          quoteLines.push(content);
+          const stripped = lines[i]!.replace(/^>\s?/, '');
+          quoteLines.push(stripped);
         } else {
           quoteLines.push(lines[i]!);
         }
@@ -577,9 +577,37 @@ export function tokenize(markdown: string): Token[] {
       continue;
     }
 
-    if (/^<(div|p|ul|ol|li|h[1-6]|table|thead|tbody|tr|td|th|pre|code|hr|br|img|blockquote)[\s>]/i.test(line)) {
+    if (/^<!--/.test(line)) {
       const htmlLines: string[] = [];
-      const tagName = line.match(/^<(\w+)/)![1]!;
+      while (i < lines.length) {
+        htmlLines.push(lines[i]!);
+        if (lines[i]!.includes('-->')) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      tokens.push({
+        type: 'html_block',
+        content: htmlLines.join('\n'),
+      });
+      continue;
+    }
+
+    if (/^<(div|p|ul|ol|li|h[1-6]|table|thead|tbody|tr|td|th|pre|code|hr|br|img|blockquote|dl|dt|dd|details|summary|section|article|nav|header|footer|aside|figure|figcaption|main)[\s>\/]/i.test(line) || /^<\w+[\s>\/]/i.test(line)) {
+      const htmlLines: string[] = [];
+      const tagMatch = line.match(/^<(\w+)/);
+      if (!tagMatch) {
+        tokens.push({ type: 'html_block', content: line });
+        i++;
+        continue;
+      }
+      const tagName = tagMatch[1]!;
+      if (/\/\s*>$/.test(line) || /^(<\s*(?:hr|br|img|input|meta|link)\b)/i.test(line)) {
+        tokens.push({ type: 'html_block', content: line });
+        i++;
+        continue;
+      }
       const closingTag = `</${tagName}>`;
       while (i < lines.length) {
         htmlLines.push(lines[i]!);
