@@ -679,10 +679,13 @@ export class TermRenderer {
     const result: string[] = []
 
     for (const line of codeLines) {
-      result.push(indentStr + line)
+      result.push(indentStr + codeStyle.render(line))
     }
 
-    return result.join("\n")
+    let output = result.join("\n")
+    if (rules.blockPrefix) output = renderText(rules.blockPrefix, cs.style) + output
+    if (rules.blockSuffix) output += renderText(rules.blockSuffix, cascaded)
+    return output
   }
 
   private async renderCodeBlockAsync(token: Token, ctx: RenderContext): Promise<string> {
@@ -739,9 +742,11 @@ export class TermRenderer {
     const cascaded = cascadeStyle(cs.style, rules, false)
 
     let format = rules.format ?? "\n--------\n"
-    // Extract the visible content between newlines and style only that
     const inner = format.replace(/^\n+|\n+$/g, "")
-    return "\n" + renderText(inner, cascaded) + "\n"
+    let result = renderText(inner, cascaded)
+    if (rules.blockPrefix) result = renderText(rules.blockPrefix, cs.style) + result
+    if (rules.blockSuffix) result += renderText(rules.blockSuffix, cascaded)
+    return "\n" + result + "\n"
   }
 
   private renderList(token: Token, ctx: RenderContext): string {
