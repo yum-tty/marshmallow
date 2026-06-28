@@ -59,9 +59,20 @@ function truncateWithEllipsis(str: string, maxWidth: number): string {
 function getStringWidth(str: string): number {
   let width = 0
   let inEscape = false
+  let inOSC = false
   for (const char of str) {
-    if (char === "\x1b") { inEscape = true; continue }
-    if (inEscape) { if (char === "m") inEscape = false; continue }
+    if (char === "\x1b") { inEscape = true; inOSC = false; continue }
+    if (inEscape) {
+      if (char === "[") { inEscape = false; continue }
+      if (char === "]") { inOSC = true; inEscape = false; continue }
+      inEscape = false
+      continue
+    }
+    if (inOSC) {
+      if (char === "\x07") { inOSC = false; continue }
+      if (char === "\x1b") { inEscape = true; inOSC = false; continue }
+      continue
+    }
     const code = char.codePointAt(0)!
     width += (code >= 0x1100 && code <= 0x115F) || (code >= 0x2329 && code <= 0x232A) ||
       (code >= 0x2E80 && code <= 0x303E) || (code >= 0x3040 && code <= 0x33BF) ||
@@ -317,17 +328,25 @@ export function WithStyles(styles: StyleConfig): TermRendererOption {
 
 export function WithStylesFromJSONBytes(jsonBytes: string): TermRendererOption {
   return (tr) => {
-    const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
-    Object.assign(tr.options.styles, parsed)
+    try {
+      const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
+      Object.assign(tr.options.styles, parsed)
+    } catch {
+      // invalid JSON — silently ignore
+    }
   }
 }
 
 export function WithStylesFromJSONFile(filename: string): TermRendererOption {
   return (tr) => {
-    const fs = (globalThis as any).require("fs") as { readFileSync: (p: string, enc: string) => string }
-    const jsonBytes = fs.readFileSync(filename, "utf-8")
-    const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
-    Object.assign(tr.options.styles, parsed)
+    try {
+      const fs = (globalThis as any).require("fs") as { readFileSync: (p: string, enc: string) => string }
+      const jsonBytes = fs.readFileSync(filename, "utf-8")
+      const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
+      Object.assign(tr.options.styles, parsed)
+    } catch {
+      // file not found or invalid JSON — silently ignore
+    }
   }
 }
 
@@ -815,7 +834,7 @@ export class TermRenderer {
     }
 
     const alignments: ('left' | 'center' | 'right' | 'none')[] = []
-    if (rows.length > 0 && rows[0]!.children) {
+    if (rows.length > 0 && rows[0]?.children) {
       for (const cell of rows[0]!.children!) {
         alignments.push(cell.alignment ?? 'none')
       }
