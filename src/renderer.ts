@@ -297,6 +297,16 @@ export function WithStylePath(stylePath: string): TermRendererOption {
     const s = getNamedStyle(stylePath)
     if (s) {
       tr.options.styles = deepCopyStyleConfig(s)
+      return
+    }
+
+    try {
+      const fs = (globalThis as any).require("fs") as { readFileSync: (p: string, enc: string) => string }
+      const jsonBytes = fs.readFileSync(stylePath, "utf-8")
+      const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
+      Object.assign(tr.options.styles, parsed)
+    } catch {
+      // not a named style and file not found — silently ignore
     }
   }
 }
