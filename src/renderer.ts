@@ -1296,3 +1296,9 @@ export function RenderWithEnvironmentConfig(markdown: string): string {
   const renderer = new Renderer({ style })
   return renderer.render(markdown)
 }
+
+export function RenderBytes(input: string, stylePath: string): string {
+  const style = getNamedStyle(stylePath) ?? defaultStyleConfig
+  const renderer = new Renderer({ style })
+  return renderer.render(input)
+}
