@@ -1530,6 +1530,14 @@ export function Plain(markdown: string, config?: RendererConfig): string {
   return renderer.render(markdown)
 }
 
+export function NewTermRenderer(...options: TermRendererOption[]): TermRenderer {
+  const tr = new TermRenderer()
+  for (const opt of options) {
+    opt(tr)
+  }
+  return tr
+}
+
 export async function Render(markdown: string, config?: RendererConfig): Promise<string> {
   const renderer = new Renderer(config)
   return await renderer.renderAsync(markdown)

@@ -1,7 +1,10 @@
 export {
+  Render,
   RenderWithStyle,
   RenderWithEnvironmentConfig,
   RenderBytes,
+  TermRenderer,
+  NewTermRenderer,
 } from "./renderer"
 
 export type {
