@@ -3,6 +3,7 @@ export {
   RenderWithStyle,
   RenderWithEnvironmentConfig,
   RenderBytes,
+  Plain,
   TermRenderer,
   NewTermRenderer,
 } from "./renderer"
