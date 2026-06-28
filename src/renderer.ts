@@ -636,12 +636,21 @@ export class TermRenderer {
     const margin = rules.margin ?? 0
     const indentStr = " ".repeat(indent + margin)
 
-    const codeLines = token.content.split("\n")
+    const lang = token.language
+    const code = token.content
+    let codeLines: string[]
+
+    if (lang && rules.chroma) {
+      codeLines = highlightCodeSync(code, lang, rules.chroma)
+    } else {
+      codeLines = code.split("\n")
+    }
+
     const codeStyle = styleToCaramel(cascaded)
     const result: string[] = []
 
     for (const line of codeLines) {
-      result.push(indentStr + codeStyle.render(line))
+      result.push(indentStr + line)
     }
 
     return result.join("\n")
@@ -1101,6 +1110,218 @@ export class TermRenderer {
   private _writeBuf = new Uint8Array(0)
   private _renderBuf = new Uint8Array(0)
   private _renderBufOffset = 0
+}
+
+interface KeywordSet {
+  keywords: string[]
+  builtins?: string[]
+  strings?: boolean
+  comments?: boolean
+}
+
+const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
+  javascript: {
+    keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield'],
+    builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'undefined', 'null', 'NaN', 'Infinity'],
+    strings: true,
+    comments: true,
+  },
+  typescript: {
+    keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'abstract', 'as', 'declare', 'is', 'keyof', 'namespace', 'readonly', 'require'],
+    builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'Partial', 'Required', 'Record', 'Pick', 'Omit', 'Exclude', 'Extract', 'NonNullable', 'ReturnType', 'Parameters'],
+    strings: true,
+    comments: true,
+  },
+  python: {
+    keywords: ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'],
+    builtins: ['True', 'False', 'None', 'print', 'len', 'range', 'int', 'str', 'float', 'list', 'dict', 'set', 'tuple', 'bool', 'type', 'object', 'super', 'self', 'cls', 'property', 'staticmethod', 'classmethod', 'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr', 'repr', 'id', 'hash', 'input', 'open', 'file', 'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError'],
+    strings: true,
+    comments: true,
+  },
+  go: {
+    keywords: ['break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import', 'interface', 'map', 'package', 'range', 'return', 'select', 'struct', 'switch', 'type', 'var'],
+    builtins: ['true', 'false', 'nil', 'iota', 'append', 'cap', 'close', 'complex', 'copy', 'delete', 'imag', 'len', 'make', 'new', 'panic', 'print', 'println', 'real', 'recover', 'error', 'string', 'int', 'int8', 'int16', 'int32', 'int64', 'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'float32', 'float64', 'complex64', 'complex128', 'bool', 'byte', 'rune', 'any', 'comparable'],
+    strings: true,
+    comments: true,
+  },
+  rust: {
+    keywords: ['as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn', 'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while', 'yield'],
+    builtins: ['String', 'Vec', 'Box', 'Rc', 'Arc', 'Option', 'Result', 'Some', 'None', 'Ok', 'Err', 'println', 'eprintln', 'format', 'vec', 'assert', 'assert_eq', 'assert_ne', 'panic', 'todo', 'unimplemented', 'unreachable', 'cfg', 'derive', 'Debug', 'Clone', 'Copy', 'Default', 'Display', 'From', 'Into'],
+    strings: true,
+    comments: true,
+  },
+  java: {
+    keywords: ['abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extends', 'final', 'finally', 'float', 'for', 'goto', 'if', 'implements', 'import', 'instanceof', 'int', 'interface', 'long', 'native', 'new', 'package', 'private', 'protected', 'public', 'return', 'short', 'static', 'strictfp', 'super', 'switch', 'synchronized', 'this', 'throw', 'throws', 'transient', 'try', 'void', 'volatile', 'while'],
+    builtins: ['String', 'System', 'Object', 'Class', 'Integer', 'Double', 'Boolean', 'ArrayList', 'HashMap', 'List', 'Map', 'Set', 'Collection', 'Iterator', 'Exception', 'RuntimeException', 'NullPointerException', 'System.out', 'System.err'],
+    strings: true,
+    comments: true,
+  },
+  bash: {
+    keywords: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'exit', 'local', 'export', 'source', 'declare', 'typeset', 'readonly', 'unset', 'shift', 'set', 'eval', 'exec', 'trap', 'wait', 'kill', 'alias', 'unalias', 'hash', 'builtin', 'command', 'enable', 'help', 'type', 'which', 'test', 'true', 'false', 'readonly'],
+    builtins: ['echo', 'printf', 'read', 'cd', 'pwd', 'ls', 'cat', 'grep', 'sed', 'awk', 'find', 'sort', 'uniq', 'wc', 'head', 'tail', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch', 'tar', 'gzip', 'gunzip', 'curl', 'wget', 'ssh', 'scp', 'git', 'docker', 'env', 'date', 'sleep', 'tee', 'xargs', '管道'],
+    strings: true,
+    comments: true,
+  },
+  c: {
+    keywords: ['auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if', 'inline', 'int', 'long', 'register', 'restrict', 'return', 'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union', 'unsigned', 'void', 'volatile', 'while', '_Alignas', '_Alignof', '_Atomic', '_Bool', '_Complex', '_Generic', '_Imaginary', '_Noreturn', '_Static_assert', '_Thread_local'],
+    builtins: ['NULL', 'EOF', 'stdin', 'stdout', 'stderr', 'printf', 'scanf', 'malloc', 'calloc', 'realloc', 'free', 'strlen', 'strcpy', 'strncpy', 'strcmp', 'strncmp', 'strcat', 'strncat', 'memcpy', 'memmove', 'memset', 'memcmp', 'FILE', 'size_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t'],
+    strings: true,
+    comments: true,
+  },
+  cpp: {
+    keywords: ['alignas', 'alignof', 'and', 'asm', 'auto', 'bool', 'break', 'case', 'catch', 'char', 'char8_t', 'char16_t', 'char32_t', 'class', 'concept', 'const', 'consteval', 'constexpr', 'constinit', 'const_cast', 'continue', 'co_await', 'co_return', 'co_yield', 'decltype', 'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'friend', 'goto', 'if', 'inline', 'int', 'long', 'mutable', 'namespace', 'new', 'noexcept', 'not', 'nullptr', 'operator', 'private', 'protected', 'public', 'register', 'reinterpret_cast', 'requires', 'return', 'short', 'signed', 'sizeof', 'static', 'static_assert', 'static_cast', 'struct', 'switch', 'template', 'this', 'thread_local', 'throw', 'true', 'try', 'typedef', 'typeid', 'typename', 'union', 'unsigned', 'using', 'virtual', 'void', 'volatile', 'wchar_t', 'while'],
+    builtins: ['std', 'string', 'vector', 'map', 'set', 'pair', 'tuple', 'array', 'list', 'deque', 'queue', 'stack', 'unordered_map', 'unordered_set', 'shared_ptr', 'unique_ptr', 'weak_ptr', 'cout', 'cin', 'cerr', 'endl', 'NULL', 'nullptr', 'size_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t'],
+    strings: true,
+    comments: true,
+  },
+  html: {
+    keywords: ['DOCTYPE', 'html', 'head', 'body', 'div', 'span', 'p', 'a', 'img', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'tr', 'td', 'th', 'form', 'input', 'button', 'select', 'option', 'textarea', 'script', 'style', 'link', 'meta', 'title', 'section', 'article', 'nav', 'header', 'footer', 'main', 'aside', 'figure', 'figcaption', 'video', 'audio', 'source', 'canvas', 'svg'],
+    strings: true,
+    comments: true,
+  },
+  css: {
+    keywords: ['@import', '@media', '@keyframes', '@font-face', '@supports', '@charset', '@namespace', '@page', '@layer', '@property', '!important', 'inherit', 'initial', 'unset', 'revert'],
+    builtins: ['root', 'body', 'html', 'head', 'link', 'meta', 'style', 'script', 'before', 'after', 'first-child', 'last-child', 'nth-child', 'hover', 'focus', 'active', 'visited', 'not', 'is', 'where', 'has'],
+    strings: true,
+    comments: true,
+  },
+  json: {
+    keywords: ['true', 'false', 'null'],
+    strings: true,
+  },
+  yaml: {
+    keywords: ['true', 'false', 'null', 'yes', 'no', 'on', 'off'],
+    strings: true,
+    comments: true,
+  },
+  xml: {
+    keywords: ['xml', 'xmlns', 'xsd', 'xsi', 'xsl', 'xslt', 'stylesheet', 'version', 'encoding', 'standalone', 'yes', 'no', 'utf-8', 'utf-16', 'iso-8859-1'],
+    strings: true,
+    comments: true,
+  },
+  sql: {
+    keywords: ['SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW', 'DATABASE', 'SCHEMA', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK', 'BEGIN', ' TRANSACTION', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS', 'NULL', 'AS', 'ON', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'GROUP', 'BY', 'ORDER', 'ASC', 'DESC', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'ALL', 'DISTINCT', 'TOP', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'IF', 'WHILE', 'LOOP', 'FOR', 'DECLARE', 'SET', 'EXEC', 'EXECUTE', 'PROCEDURE', 'FUNCTION', 'RETURN', 'RETURNS', 'TRIGGER', 'CONSTRAINT', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT', 'AUTO_INCREMENT', 'SERIAL', 'BIGSERIAL', 'BOOLEAN', 'INTEGER', 'BIGINT', 'SMALLINT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'VARCHAR', 'CHAR', 'TEXT', 'BLOB', 'DATE', 'TIME', 'TIMESTAMP', 'DATETIME', 'INTERVAL', 'JSON', 'JSONB', 'UUID', 'ARRAY'],
+    builtins: ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ABS', 'ROUND', 'CEIL', 'FLOOR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'SUBSTRING', 'CONCAT', 'COALESCE', 'NULLIF', 'CAST', 'CONVERT', 'NOW', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'EXTRACT', 'DATE_TRUNC', 'AGE', 'TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'SPLIT_PART', 'ARRAY_AGG', 'STRING_AGG', 'JSON_AGG', 'JSONB_AGG', 'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE', 'NTILE', 'SUM', 'OVER'],
+    strings: true,
+    comments: true,
+  },
+}
+
+function escapeAnsi(code: number): string {
+  return `\x1b[${code}m`
+}
+
+const ANSI_RESET = '\x1b[0m'
+const ANSI_BOLD = '\x1b[1m'
+const ANSI_ITALIC = '\x1b[3m'
+const ANSI_FG_YELLOW = '\x1b[33m'
+const ANSI_FG_GREEN = '\x1b[32m'
+const ANSI_FG_CYAN = '\x1b[36m'
+const ANSI_FG_MAGENTA = '\x1b[35m'
+const ANSI_FG_RED = '\x1b[31m'
+const ANSI_FG_BLUE = '\x1b[34m'
+const ANSI_FG_GRAY = '\x1b[90m'
+
+function highlightLineSync(line: string, langDef: KeywordSet): string {
+  const result: string[] = []
+  let i = 0
+
+  while (i < line.length) {
+    if (langDef.comments && line[i] === '/' && line[i + 1] === '/') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line[i] === '#' && (langDef.keywords.includes('print') || langDef.keywords.includes('echo'))) {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line.slice(i, i + 2) === '/*') {
+      const endIdx = line.indexOf('*/', i + 2)
+      if (endIdx !== -1) {
+        result.push(ANSI_FG_GRAY + line.slice(i, endIdx + 2) + ANSI_RESET)
+        i = endIdx + 2
+        continue
+      } else {
+        result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+        break
+      }
+    }
+
+    if (langDef.comments && line.slice(i, i + 3) === '///') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.strings && (line[i] === '"' || line[i] === "'" || line[i] === '`')) {
+      const quote = line[i]!
+      let j = i + 1
+      while (j < line.length && line[j] !== quote) {
+        if (line[j] === '\\') j++
+        j++
+      }
+      if (j < line.length) j++
+      result.push(ANSI_FG_GREEN + line.slice(i, j) + ANSI_RESET)
+      i = j
+      continue
+    }
+
+    if (/[a-zA-Z_$]/.test(line[i]!)) {
+      let j = i
+      while (j < line.length && /[a-zA-Z0-9_$]/.test(line[j]!)) j++
+      const word = line.slice(i, j)
+
+      if (langDef.keywords.includes(word)) {
+        result.push(ANSI_BOLD + ANSI_FG_MAGENTA + word + ANSI_RESET)
+      } else if (langDef.builtins?.includes(word)) {
+        result.push(ANSI_FG_CYAN + word + ANSI_RESET)
+      } else if (j < line.length && line[j] === '(') {
+        result.push(ANSI_FG_BLUE + word + ANSI_RESET)
+      } else if (word[0] === word[0]!.toUpperCase() && /^[A-Z]/.test(word)) {
+        result.push(ANSI_FG_YELLOW + word + ANSI_RESET)
+      } else {
+        result.push(word)
+      }
+      i = j
+      continue
+    }
+
+    if (/[0-9]/.test(line[i]!)) {
+      let j = i
+      while (j < line.length && /[0-9.xXa-fA-FeE_]/.test(line[j]!)) j++
+      result.push(ANSI_FG_CYAN + line.slice(i, j) + ANSI_RESET)
+      i = j
+      continue
+    }
+
+    if (/[+\-*/%=<>!&|^~?:]/.test(line[i]!)) {
+      let j = i
+      while (j < line.length && /[+\-*/%=<>!&|^~?:]/.test(line[j]!)) j++
+      result.push(ANSI_FG_RED + line.slice(i, j) + ANSI_RESET)
+      i = j
+      continue
+    }
+
+    if (/[()[\]{}]/.test(line[i]!)) {
+      result.push(ANSI_FG_GRAY + line[i]! + ANSI_RESET)
+      i++
+      continue
+    }
+
+    result.push(line[i]!)
+    i++
+  }
+
+  return result.join('')
+}
+
+function highlightCodeSync(code: string, lang: string, _chroma: Chroma): string[] {
+  const langDef = LANGUAGE_KEYWORDS[lang]
+  if (!langDef) return code.split("\n")
+
+  const lines = code.split("\n")
+  return lines.map(line => highlightLineSync(line, langDef))
 }
 
 function padRight(str: string, targetLen: number): string {

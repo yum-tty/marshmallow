@@ -24,6 +24,8 @@ export type TokenType =
   | 'footnote_list'
   | 'footnote_link'
   | 'footnote_backlink'
+  | 'ref_link'
+  | 'ref_definition'
   | 'emoji'
   | 'text'
   | 'softbreak'
@@ -208,6 +210,26 @@ function buildNestedListTokens(tokens: Token[]): Token[] {
   return result
 }
 
+function resolveRefLinks(tokens: Token[], refDefs: Map<string, { href: string; title?: string }>): void {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t.type === 'ref_link') {
+      const def = refDefs.get(t.ref!.toLowerCase());
+      if (def) {
+        tokens[i] = {
+          type: 'link',
+          content: t.content,
+          href: def.href,
+          title: def.title,
+        };
+      }
+    }
+    if (t.children) {
+      resolveRefLinks(t.children, refDefs);
+    }
+  }
+}
+
 export function parseInlineTokens(text: string): Token[] {
   const tokens: Token[] = [];
   let pos = 0;
@@ -240,6 +262,30 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
+    const refLinkMatch = rest.match(/^\[([^\]]+)\]\[([^\]]*)\]/);
+    if (refLinkMatch) {
+      const linkContent = refLinkMatch[1]!;
+      const refId = refLinkMatch[2] || linkContent;
+      tokens.push({
+        type: 'ref_link',
+        content: linkContent,
+        ref: refId,
+      });
+      pos += refLinkMatch[0].length;
+      continue;
+    }
+
+    const shorthandRefMatch = rest.match(/^\[([^\]]+)\](?!\(|\[)/);
+    if (shorthandRefMatch) {
+      tokens.push({
+        type: 'ref_link',
+        content: shorthandRefMatch[1]!,
+        ref: shorthandRefMatch[1]!,
+      });
+      pos += shorthandRefMatch[0].length;
+      continue;
+    }
+
     const footnoteLinkMatch = rest.match(/^\[\^([^\]]+)\]/);
     if (footnoteLinkMatch) {
       const ref = footnoteLinkMatch[1]!;
@@ -256,11 +302,15 @@ export function parseInlineTokens(text: string): Token[] {
       continue;
     }
 
-    const codeMatch = rest.match(/^(`+)([^`]+)\1/);
+    const codeMatch = rest.match(/^(`+)(\s*)(.*?)(\s*)\1(?!`)/s);
     if (codeMatch) {
+      let content = codeMatch[3]!;
+      if (codeMatch[2] || codeMatch[4]) {
+        content = codeMatch[2] + content + codeMatch[4];
+      }
       tokens.push({
         type: 'codespan',
-        content: codeMatch[2]!,
+        content,
       });
       pos += codeMatch[0].length;
       continue;
@@ -354,12 +404,24 @@ export function tokenize(markdown: string): Token[] {
   let i = 0;
   let footnoteCounter = 0;
   const footnoteDefs: Map<string, { content: string; number: number }> = new Map();
+  const refDefs: Map<string, { href: string; title?: string }> = new Map();
 
   while (i < lines.length) {
     const line = lines[i]!;
 
     if (line.trim() === '') {
       tokens.push({ type: 'blank_line', content: '' });
+      i++;
+      continue;
+    }
+
+    const refDefMatch = line.match(/^\[([^\]]+)\]:\s+<?(\S+)>?\s*(?:"([^"]*)")?$/);
+    if (refDefMatch) {
+      const refId = refDefMatch[1]!.toLowerCase();
+      refDefs.set(refId, {
+        href: refDefMatch[2]!,
+        title: refDefMatch[3] || undefined,
+      });
       i++;
       continue;
     }
@@ -679,6 +741,10 @@ export function tokenize(markdown: string): Token[] {
       content: '',
       children: footnoteTokens,
     });
+  }
+
+  if (refDefs.size > 0) {
+    resolveRefLinks(tokens, refDefs);
   }
 
   return buildNestedListTokens(tokens);
