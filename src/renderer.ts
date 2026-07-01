@@ -286,7 +286,7 @@ function deepCopyStyleConfig(src: StyleConfig): StyleConfig {
   return JSON.parse(JSON.stringify(src))
 }
 
-export type TermRendererOption = (tr: TermRenderer) => void
+export type TermRendererOption = (tr: TermRenderer) => void | Error
 
 export function WithBaseURL(baseURL: string): TermRendererOption {
   return (tr) => { tr.options.baseURL = baseURL }
@@ -316,8 +316,8 @@ export function WithStylePath(stylePath: string): TermRendererOption {
       const jsonBytes = fs.readFileSync(stylePath, "utf-8")
       const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
       Object.assign(tr.options.styles, parsed)
-    } catch {
-      // not a named style and file not found — silently ignore
+    } catch (e) {
+      return new Error(`marshmallow: error reading style path: ${stylePath}`)
     }
   }
 }
@@ -331,8 +331,8 @@ export function WithStylesFromJSONBytes(jsonBytes: string): TermRendererOption {
     try {
       const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
       Object.assign(tr.options.styles, parsed)
-    } catch {
-      // invalid JSON — silently ignore
+    } catch (e) {
+      return new Error(`marshmallow: error parsing style JSON`)
     }
   }
 }
@@ -344,8 +344,8 @@ export function WithStylesFromJSONFile(filename: string): TermRendererOption {
       const jsonBytes = fs.readFileSync(filename, "utf-8")
       const parsed = JSON.parse(jsonBytes) as Partial<StyleConfig>
       Object.assign(tr.options.styles, parsed)
-    } catch {
-      // file not found or invalid JSON — silently ignore
+    } catch (e) {
+      return new Error(`marshmallow: error reading style file: ${filename}`)
     }
   }
 }
@@ -846,6 +846,7 @@ export class TermRenderer {
     }
 
     const tableRules = ctx.options.styles.table
+    const docRules = ctx.options.styles.document
     const cs = ctx.blockStack.current()
     const cascaded = cascadeStyle(cs.style, tableRules, false)
 
@@ -853,8 +854,6 @@ export class TermRenderer {
     const colSep = tableRules.columnSeparator ?? "│"
     const rowSep = tableRules.rowSeparator ?? "─"
 
-    // In glamour, ALL outer borders are disabled (BorderTop/Left/Right/Bottom = false).
-    // Only internal separators are visible: colSep between columns, rowSep for row lines.
     const sepLine = colWidths.map(w => rowSep.repeat(w + 2)).join(centerSep)
     const result: string[] = []
 
@@ -866,21 +865,31 @@ export class TermRenderer {
         const cellText = row[c] ?? ''
         const truncated = truncateWithEllipsis(cellText, colWidths[c]!)
         const align = alignments[c] ?? 'none'
+
+        let cellStyle = { ...cascaded }
+        if (docRules.backgroundColor != null) {
+          cellStyle.backgroundColor = docRules.backgroundColor
+        }
+
+        if (r === 0) {
+          cellStyle = cascadeStyle(cellStyle, ctx.options.styles.strong, false)
+        }
+
+        const margin = tableRules.margin ?? 1
         const padded = align === 'center'
           ? padCenter(truncated, colWidths[c]!)
           : align === 'right'
           ? padLeft(truncated, colWidths[c]!)
           : padRight(truncated, colWidths[c]!)
-        cells.push(' ' + padded + ' ')
+        cells.push(styleToCaramel(cellStyle).render(' '.repeat(margin) + padded + ' '.repeat(margin)))
       }
 
       const rowStr = cells.join(colSep)
       if (r === 0) {
-        const headerStyle = cascadeStyle(cascaded, ctx.options.styles.strong, false)
-        result.push(styleToCaramel(headerStyle).render(rowStr))
+        result.push(rowStr)
         result.push(styleToCaramel(cascaded).render(sepLine))
       } else {
-        result.push(styleToCaramel(cascaded).render(rowStr))
+        result.push(rowStr)
       }
     }
 
@@ -1111,6 +1120,9 @@ export class TermRenderer {
   }
 
   read(buf: Uint8Array): number {
+    if (this._renderBufOffset >= this._renderBuf.length) {
+      return 0
+    }
     const chunk = this._renderBuf.slice(this._renderBufOffset, this._renderBufOffset + buf.length)
     chunk.forEach((v, i) => { buf[i] = v })
     this._renderBufOffset += chunk.length
@@ -1160,18 +1172,23 @@ const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
     strings: true,
     comments: true,
   },
+  js: { keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield'], builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'undefined', 'null', 'NaN', 'Infinity'], strings: true, comments: true },
+  jsx: { keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield'], builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'React'], strings: true, comments: true },
+  tsx: { keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'abstract', 'as', 'declare', 'is', 'keyof', 'namespace', 'readonly', 'require'], builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'Partial', 'Required', 'Record', 'Pick', 'Omit', 'React'], strings: true, comments: true },
   typescript: {
     keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'abstract', 'as', 'declare', 'is', 'keyof', 'namespace', 'readonly', 'require'],
     builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'Partial', 'Required', 'Record', 'Pick', 'Omit', 'Exclude', 'Extract', 'NonNullable', 'ReturnType', 'Parameters'],
     strings: true,
     comments: true,
   },
+  ts: { keywords: ['async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'abstract', 'as', 'declare', 'is', 'keyof', 'namespace', 'readonly', 'require'], builtins: ['console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set', 'Symbol', 'Proxy', 'Reflect', 'Partial', 'Required', 'Record', 'Pick', 'Omit', 'Exclude', 'Extract', 'NonNullable', 'ReturnType', 'Parameters'], strings: true, comments: true },
   python: {
     keywords: ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'],
     builtins: ['True', 'False', 'None', 'print', 'len', 'range', 'int', 'str', 'float', 'list', 'dict', 'set', 'tuple', 'bool', 'type', 'object', 'super', 'self', 'cls', 'property', 'staticmethod', 'classmethod', 'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr', 'repr', 'id', 'hash', 'input', 'open', 'file', 'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError'],
     strings: true,
     comments: true,
   },
+  py: { keywords: ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'], builtins: ['True', 'False', 'None', 'print', 'len', 'range', 'int', 'str', 'float', 'list', 'dict', 'set', 'tuple', 'bool', 'type', 'object', 'super', 'self', 'cls', 'property', 'staticmethod', 'classmethod', 'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr', 'repr', 'id', 'hash', 'input', 'open', 'file', 'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError'], strings: true, comments: true },
   go: {
     keywords: ['break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import', 'interface', 'map', 'package', 'range', 'return', 'select', 'struct', 'switch', 'type', 'var'],
     builtins: ['true', 'false', 'nil', 'iota', 'append', 'cap', 'close', 'complex', 'copy', 'delete', 'imag', 'len', 'make', 'new', 'panic', 'print', 'println', 'real', 'recover', 'error', 'string', 'int', 'int8', 'int16', 'int32', 'int64', 'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'float32', 'float64', 'complex64', 'complex128', 'bool', 'byte', 'rune', 'any', 'comparable'],
@@ -1190,9 +1207,57 @@ const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
     strings: true,
     comments: true,
   },
-  bash: {
-    keywords: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'exit', 'local', 'export', 'source', 'declare', 'typeset', 'readonly', 'unset', 'shift', 'set', 'eval', 'exec', 'trap', 'wait', 'kill', 'alias', 'unalias', 'hash', 'builtin', 'command', 'enable', 'help', 'type', 'which', 'test', 'true', 'false', 'readonly'],
-    builtins: ['echo', 'printf', 'read', 'cd', 'pwd', 'ls', 'cat', 'grep', 'sed', 'awk', 'find', 'sort', 'uniq', 'wc', 'head', 'tail', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch', 'tar', 'gzip', 'gunzip', 'curl', 'wget', 'ssh', 'scp', 'git', 'docker', 'env', 'date', 'sleep', 'tee', 'xargs', '管道'],
+  kotlin: {
+    keywords: ['abstract', 'actual', 'annotation', 'as', 'break', 'by', 'catch', 'class', 'companion', 'const', 'constructor', 'continue', 'crossinline', 'data', 'delegate', 'do', 'dynamic', 'else', 'enum', 'expect', 'external', 'false', 'final', 'finally', 'for', 'fun', 'get', 'if', 'import', 'in', 'infix', 'init', 'inline', 'inner', 'interface', 'internal', 'is', 'it', 'lateinit', 'lazy', 'noinline', 'null', 'object', 'open', 'operator', 'out', 'override', 'package', 'private', 'protected', 'public', 'reified', 'return', 'sealed', 'set', 'super', 'suspend', 'tailrec', 'this', 'throw', 'true', 'try', 'typealias', 'val', 'var', 'vararg', 'when', 'while'],
+    builtins: ['Any', 'Array', 'Boolean', 'Byte', 'Char', 'Double', 'Float', 'Int', 'Long', 'Nothing', 'Short', 'String', 'Unit', 'List', 'Map', 'MutableList', 'MutableMap', 'Set', 'MutableSet', 'println', 'print', 'require', 'check', 'error', 'TODO', 'run', 'with', 'apply', 'let', 'also', 'use'],
+    strings: true,
+    comments: true,
+  },
+  swift: {
+    keywords: ['associatedtype', 'break', 'case', 'catch', 'class', 'continue', 'convenience', 'default', 'defer', 'deinit', 'do', 'dynamic', 'else', 'enum', 'extension', 'fallthrough', 'false', 'fileprivate', 'final', 'for', 'func', 'guard', 'if', 'import', 'in', 'indirect', 'init', 'inout', 'internal', 'is', 'lazy', 'let', 'mutating', 'nil', 'none', 'open', 'operator', 'optional', 'override', 'private', 'protocol', 'public', 'repeat', 'required', 'rethrows', 'return', 'self', 'Self', 'static', 'struct', 'subscript', 'super', 'switch', 'throw', 'throws', 'true', 'try', 'typealias', 'unowned', 'var', 'weak', 'where', 'while', 'willSet', 'didSet', 'some'],
+    builtins: ['Array', 'Bool', 'Character', 'ClosedRange', 'Dictionary', 'Double', 'Float', 'Int', 'Optional', 'Range', 'Set', 'String', 'UInt', 'Void', 'print', 'debugPrint', 'fatalError', 'assert', 'precondition', 'withUnsafePointer', 'withUnsafeMutablePointer'],
+    strings: true,
+    comments: true,
+  },
+  ruby: {
+    keywords: ['BEGIN', 'END', 'alias', 'and', 'begin', 'break', 'case', 'class', 'def', 'defined?', 'do', 'else', 'elsif', 'end', 'ensure', 'false', 'for', 'if', 'in', 'module', 'next', 'nil', 'not', 'or', 'redo', 'rescue', 'retry', 'return', 'self', 'super', 'then', 'true', 'undef', 'unless', 'until', 'when', 'while', 'yield', 'require', 'require_relative', 'include', 'extend', 'attr_reader', 'attr_writer', 'attr_accessor', 'initialize', 'new'],
+    builtins: ['Kernel', 'Object', 'Class', 'Module', 'String', 'Integer', 'Float', 'Array', 'Hash', 'Symbol', 'Proc', 'Block', 'NilClass', 'TrueClass', 'FalseClass', 'IO', 'File', 'Dir', 'puts', 'print', 'p', 'gets', 'raise', 'lambda', 'proc'],
+    strings: true,
+    comments: true,
+  },
+  php: {
+    keywords: ['abstract', 'and', 'array', 'as', 'break', 'callable', 'case', 'catch', 'class', 'clone', 'const', 'continue', 'declare', 'default', 'die', 'do', 'echo', 'else', 'elseif', 'empty', 'enddeclare', 'endfor', 'endforeach', 'endif', 'endswitch', 'endwhile', 'eval', 'exit', 'extends', 'final', 'finally', 'fn', 'for', 'foreach', 'function', 'global', 'goto', 'if', 'implements', 'include', 'include_once', 'instanceof', 'insteadof', 'interface', 'isset', 'list', 'match', 'namespace', 'new', 'or', 'print', 'private', 'protected', 'public', 'readonly', 'require', 'require_once', 'return', 'static', 'switch', 'throw', 'trait', 'try', 'unset', 'use', 'var', 'while', 'xor', 'yield', 'yield_from'],
+    builtins: ['true', 'false', 'null', 'self', 'parent', 'static', 'PHP_INT_MAX', 'PHP_FLOAT_MAX', 'PHP_EOL', 'echo', 'var_dump', 'print_r', 'die', 'exit', 'count', 'strlen', 'substr', 'strpos', 'str_replace', 'array_merge', 'array_push', 'array_pop', 'isset', 'empty', 'unset', 'json_encode', 'json_decode', 'file_get_contents', 'file_put_contents'],
+    strings: true,
+    comments: true,
+  },
+  lua: {
+    keywords: ['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while'],
+    builtins: ['print', 'type', 'tostring', 'tonumber', 'error', 'assert', 'require', 'pcall', 'xpcall', 'ipairs', 'pairs', 'next', 'select', 'unpack', 'rawget', 'rawset', 'setmetatable', 'getmetatable', 'table', 'string', 'math', 'io', 'os', 'coroutine', 'debug', 'loadstring', 'load', 'setfenv', 'getfenv'],
+    strings: true,
+    comments: true,
+  },
+  perl: {
+    keywords: ['if', 'elsif', 'else', 'unless', 'given', 'when', 'for', 'foreach', 'while', 'until', 'do', 'continue', 'break', 'next', 'last', 'redo', 'return', 'sub', 'package', 'use', 'require', 'no', 'my', 'our', 'local', 'state', 'has', 'method', 'around', 'before', 'after', 'augment', 'supercede', 'with', 'where', 'type', 'enum', 'class', 'role'],
+    builtins: ['print', 'say', 'warn', 'die', 'exit', 'open', 'close', 'read', 'write', 'seek', 'tell', 'eof', 'chomp', 'chop', 'split', 'join', 'push', 'pop', 'shift', 'unshift', 'splice', 'keys', 'values', 'each', 'exists', 'delete', 'defined', 'undef', 'length', 'substr', 'index', 'rindex', 'reverse', 'sort', 'map', 'grep', 'sort', 'eval', 'scalar', 'wantarray'],
+    strings: true,
+    comments: true,
+  },
+  shell: {
+    keywords: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'exit', 'local', 'export', 'source', 'declare', 'typeset', 'readonly', 'unset', 'shift', 'set', 'eval', 'exec', 'trap', 'wait', 'kill', 'alias', 'unalias', 'hash', 'builtin', 'command', 'enable', 'help', 'type', 'which', 'test', 'true', 'false'],
+    builtins: ['echo', 'printf', 'read', 'cd', 'pwd', 'ls', 'cat', 'grep', 'sed', 'awk', 'find', 'sort', 'uniq', 'wc', 'head', 'tail', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch', 'tar', 'gzip', 'gunzip', 'curl', 'wget', 'ssh', 'scp', 'git', 'docker', 'env', 'date', 'sleep', 'tee', 'xargs'],
+    strings: true,
+    comments: true,
+  },
+  zsh: {
+    keywords: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'exit', 'local', 'export', 'source', 'declare', 'typeset', 'readonly', 'unset', 'shift', 'set', 'eval', 'exec', 'trap', 'wait', 'kill', 'alias', 'unalias', 'hash', 'builtin', 'command', 'enable', 'help', 'type', 'which', 'test', 'true', 'false', 'autoload', 'zle', 'bindkey', 'compdef', 'compadd', 'zstyle', 'print', 'read'],
+    builtins: ['echo', 'printf', 'read', 'cd', 'pwd', 'ls', 'cat', 'grep', 'sed', 'awk', 'find', 'sort', 'uniq', 'wc', 'head', 'tail', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch', 'tar', 'gzip', 'gunzip', 'curl', 'wget', 'ssh', 'scp', 'git', 'docker'],
+    strings: true,
+    comments: true,
+  },
+  fish: {
+    keywords: ['if', 'else', 'else if', 'end', 'for', 'while', 'function', 'return', 'break', 'continue', 'switch', 'case', 'begin', 'and', 'or', 'not', 'in', 'set', 'setenv', 'export', 'source', 'eval', 'command', 'builtin', 'status', 'count', 'test', 'true', 'false'],
+    builtins: ['echo', 'printf', 'read', 'cd', 'pwd', 'ls', 'cat', 'grep', 'sed', 'awk', 'find', 'sort', 'uniq', 'wc', 'head', 'tail', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch', 'tar', 'gzip', 'gunzip', 'curl', 'wget', 'ssh', 'scp', 'git', 'docker', 'string', 'math', 'contains', 'count'],
     strings: true,
     comments: true,
   },
@@ -1208,6 +1273,14 @@ const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
     strings: true,
     comments: true,
   },
+  h: {
+    keywords: ['alignas', 'alignof', 'and', 'asm', 'auto', 'bool', 'break', 'case', 'catch', 'char', 'class', 'concept', 'const', 'consteval', 'constexpr', 'constinit', 'const_cast', 'continue', 'decltype', 'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'friend', 'goto', 'if', 'inline', 'int', 'long', 'mutable', 'namespace', 'new', 'noexcept', 'not', 'nullptr', 'operator', 'private', 'protected', 'public', 'register', 'reinterpret_cast', 'requires', 'return', 'short', 'signed', 'sizeof', 'static', 'static_assert', 'static_cast', 'struct', 'switch', 'template', 'this', 'thread_local', 'throw', 'true', 'try', 'typedef', 'typeid', 'typename', 'union', 'unsigned', 'using', 'virtual', 'void', 'volatile', 'wchar_t', 'while'], builtins: ['std', 'string', 'vector', 'map', 'set', 'pair', 'tuple', 'array', 'list', 'deque', 'queue', 'stack', 'unordered_map', 'unordered_set', 'shared_ptr', 'unique_ptr', 'weak_ptr', 'cout', 'cin', 'cerr', 'endl', 'NULL', 'nullptr', 'size_t'], strings: true, comments: true },
+  cs: {
+    keywords: ['abstract', 'as', 'base', 'bool', 'break', 'byte', 'case', 'catch', 'char', 'checked', 'class', 'const', 'continue', 'decimal', 'default', 'delegate', 'do', 'double', 'else', 'enum', 'event', 'explicit', 'extern', 'false', 'finally', 'fixed', 'float', 'for', 'foreach', 'goto', 'if', 'implicit', 'in', 'int', 'interface', 'internal', 'is', 'lock', 'long', 'namespace', 'new', 'null', 'object', 'operator', 'out', 'override', 'params', 'private', 'protected', 'public', 'readonly', 'ref', 'return', 'sbyte', 'sealed', 'short', 'sizeof', 'stackalloc', 'static', 'string', 'struct', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'uint', 'ulong', 'unchecked', 'unsafe', 'ushort', 'using', 'var', 'virtual', 'void', 'volatile', 'while', 'yield', 'async', 'await', 'when'],
+    builtins: ['Console', 'String', 'Int32', 'Int64', 'Boolean', 'Object', 'Array', 'List', 'Dictionary', 'HashSet', 'Queue', 'Stack', 'StringBuilder', 'Exception', 'Math', 'DateTime', 'TimeSpan', 'Guid', 'Uri', 'Convert', 'Enum', 'Tuple', 'ValueTuple', 'Task', 'TaskCompletionSource', 'CancellationToken', 'Action', 'Func', 'Predicate', 'IDisposable', 'IEnumerable', 'IEnumerator', 'IComparable', 'IEquatable'],
+    strings: true,
+    comments: true,
+  },
   html: {
     keywords: ['DOCTYPE', 'html', 'head', 'body', 'div', 'span', 'p', 'a', 'img', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'tr', 'td', 'th', 'form', 'input', 'button', 'select', 'option', 'textarea', 'script', 'style', 'link', 'meta', 'title', 'section', 'article', 'nav', 'header', 'footer', 'main', 'aside', 'figure', 'figcaption', 'video', 'audio', 'source', 'canvas', 'svg'],
     strings: true,
@@ -1219,12 +1292,46 @@ const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
     strings: true,
     comments: true,
   },
+  scss: {
+    keywords: ['@import', '@media', '@keyframes', '@font-face', '@supports', '@charset', '@namespace', '@page', '@layer', '@property', '@mixin', '@include', '@extend', '@content', '@at-root', '@debug', '@warn', '@error', '@if', '@else', '@for', '@each', '@while', '@return', '@function', '!important', 'inherit', 'initial', 'unset', 'revert'],
+    builtins: ['root', 'body', 'html', 'head', 'link', 'meta', 'style', 'script', 'before', 'after', 'first-child', 'last-child', 'nth-child', 'hover', 'focus', 'active', 'visited', 'not', 'is', 'where', 'has', 'red', 'green', 'blue', 'rgba', 'hsla', 'linear-gradient', 'radial-gradient'],
+    strings: true,
+    comments: true,
+  },
+  sass: {
+    keywords: ['@import', '@media', '@keyframes', '@font-face', '@supports', '@charset', '@namespace', '@page', '@layer', '@property', '@mixin', '@include', '@extend', '@content', '@at-root', '@debug', '@warn', '@error', '@if', '@else', '@for', '@each', '@while', '@return', '@function', '!important', 'inherit', 'initial', 'unset', 'revert'],
+    builtins: ['root', 'body', 'html', 'head', 'link', 'meta', 'style', 'script', 'before', 'after', 'first-child', 'last-child', 'nth-child', 'hover', 'focus', 'active', 'visited', 'not', 'is', 'where', 'has', 'red', 'green', 'blue', 'rgba', 'hsla'],
+    strings: true,
+    comments: true,
+  },
+  less: {
+    keywords: ['@import', '@media', '@keyframes', '@font-face', '@supports', '@charset', '@namespace', '@page', '@layer', '@property', '!important', 'inherit', 'initial', 'unset', 'revert', 'when', 'extend', 'each', 'each()', 'extend()', 'mix()', 'lighten()', 'darken()', 'saturate()', 'desaturate()'],
+    builtins: ['root', 'body', 'html', 'head', 'link', 'meta', 'style', 'script', 'before', 'after', 'first-child', 'last-child', 'nth-child', 'hover', 'focus', 'active', 'visited', 'not', 'is', 'where', 'has', 'red', 'green', 'blue', 'rgba', 'hsla'],
+    strings: true,
+    comments: true,
+  },
   json: {
     keywords: ['true', 'false', 'null'],
     strings: true,
   },
+  jsonc: {
+    keywords: ['true', 'false', 'null'],
+    strings: true,
+    comments: true,
+  },
   yaml: {
     keywords: ['true', 'false', 'null', 'yes', 'no', 'on', 'off'],
+    strings: true,
+    comments: true,
+  },
+  yml: { keywords: ['true', 'false', 'null', 'yes', 'no', 'on', 'off'], strings: true, comments: true },
+  toml: {
+    keywords: ['true', 'false'],
+    strings: true,
+    comments: true,
+  },
+  ini: {
+    keywords: ['true', 'false'],
     strings: true,
     comments: true,
   },
@@ -1233,12 +1340,123 @@ const LANGUAGE_KEYWORDS: Record<string, KeywordSet> = {
     strings: true,
     comments: true,
   },
-  sql: {
-    keywords: ['SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW', 'DATABASE', 'SCHEMA', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK', 'BEGIN', ' TRANSACTION', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS', 'NULL', 'AS', 'ON', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'GROUP', 'BY', 'ORDER', 'ASC', 'DESC', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'ALL', 'DISTINCT', 'TOP', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'IF', 'WHILE', 'LOOP', 'FOR', 'DECLARE', 'SET', 'EXEC', 'EXECUTE', 'PROCEDURE', 'FUNCTION', 'RETURN', 'RETURNS', 'TRIGGER', 'CONSTRAINT', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT', 'AUTO_INCREMENT', 'SERIAL', 'BIGSERIAL', 'BOOLEAN', 'INTEGER', 'BIGINT', 'SMALLINT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'VARCHAR', 'CHAR', 'TEXT', 'BLOB', 'DATE', 'TIME', 'TIMESTAMP', 'DATETIME', 'INTERVAL', 'JSON', 'JSONB', 'UUID', 'ARRAY'],
-    builtins: ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ABS', 'ROUND', 'CEIL', 'FLOOR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'SUBSTRING', 'CONCAT', 'COALESCE', 'NULLIF', 'CAST', 'CONVERT', 'NOW', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'EXTRACT', 'DATE_TRUNC', 'AGE', 'TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'SPLIT_PART', 'ARRAY_AGG', 'STRING_AGG', 'JSON_AGG', 'JSONB_AGG', 'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE', 'NTILE', 'SUM', 'OVER'],
+  svg: {
+    keywords: ['xml', 'xmlns', 'xsd', 'xsi', 'xsl', 'xslt', 'stylesheet', 'version', 'encoding', 'standalone', 'yes', 'no', 'utf-8', 'utf-16', 'iso-8859-1', 'circle', 'rect', 'line', 'path', 'polygon', 'polyline', 'ellipse', 'g', 'defs', 'use', 'clipPath', 'mask', 'pattern', 'image', 'text', 'tspan', 'textPath', 'linearGradient', 'radialGradient', 'stop', 'filter', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite', 'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feFlood', 'feGaussianBlur', 'feImage', 'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'feSpecularLighting', 'feTile', 'feTurbulence', 'animate', 'animateMotion', 'animateTransform', 'set'],
     strings: true,
     comments: true,
   },
+  sql: {
+    keywords: ['SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW', 'DATABASE', 'SCHEMA', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK', 'BEGIN', 'TRANSACTION', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS', 'NULL', 'AS', 'ON', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'GROUP', 'BY', 'ORDER', 'ASC', 'DESC', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'ALL', 'DISTINCT', 'TOP', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'IF', 'WHILE', 'LOOP', 'FOR', 'DECLARE', 'SET', 'EXEC', 'EXECUTE', 'PROCEDURE', 'FUNCTION', 'RETURN', 'RETURNS', 'TRIGGER', 'CONSTRAINT', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT', 'AUTO_INCREMENT', 'SERIAL', 'BIGSERIAL', 'BOOLEAN', 'INTEGER', 'BIGINT', 'SMALLINT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'VARCHAR', 'CHAR', 'TEXT', 'BLOB', 'DATE', 'TIME', 'TIMESTAMP', 'DATETIME', 'INTERVAL', 'JSON', 'JSONB', 'UUID', 'ARRAY'],
+    builtins: ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ABS', 'ROUND', 'CEIL', 'FLOOR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'SUBSTRING', 'CONCAT', 'COALESCE', 'NULLIF', 'CAST', 'CONVERT', 'NOW', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'EXTRACT', 'DATE_TRUNC', 'AGE', 'TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'SPLIT_PART', 'ARRAY_AGG', 'STRING_AGG', 'JSON_AGG', 'JSONB_AGG', 'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE', 'NTILE', 'OVER'],
+    strings: true,
+    comments: true,
+  },
+  graphql: {
+    keywords: ['type', 'query', 'mutation', 'subscription', 'fragment', 'on', 'schema', 'extend', 'enum', 'input', 'interface', 'union', 'scalar', 'directive', 'repeatable', 'implements', 'extend', 'null', 'true', 'false'],
+    builtins: ['String', 'Int', 'Float', 'Boolean', 'ID', 'null', 'true', 'false'],
+    strings: true,
+    comments: true,
+  },
+  protobuf: {
+    keywords: ['syntax', 'package', 'import', 'option', 'message', 'enum', 'service', 'rpc', 'returns', 'stream', 'repeated', 'optional', 'required', 'oneof', 'map', 'reserved', 'to', 'max', 'extensions', 'extend', 'option', 'optimizefor', 'javapackage', 'go_package', 'cc_generic_services', 'java_generic_services', 'py_generic_services', 'deprecated', 'true', 'false', 'inf', 'nan'],
+    builtins: ['double', 'float', 'int32', 'int64', 'uint32', 'uint64', 'sint32', 'sint64', 'fixed32', 'fixed64', 'sfixed32', 'sfixed64', 'bool', 'string', 'bytes', 'google.protobuf.Timestamp', 'google.protobuf.Duration', 'google.protobuf.Empty', 'google.protobuf.Any', 'google.protobuf.Struct', 'google.protobuf.Value', 'google.protobuf.ListValue'],
+    strings: true,
+    comments: true,
+  },
+  dart: {
+    keywords: ['abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'covariant', 'default', 'deferred', 'do', 'dynamic', 'else', 'enum', 'export', 'extends', 'extension', 'external', 'factory', 'false', 'final', 'finally', 'for', 'function', 'get', 'if', 'implements', 'import', 'in', 'interface', 'is', 'late', 'let', 'library', 'mixin', 'new', 'null', 'on', 'operator', 'part', 'required', 'rethrow', 'return', 'set', 'show', 'static', 'super', 'switch', 'sync', 'this', 'throw', 'true', 'try', 'typedef', 'var', 'void', 'while', 'with', 'yield'],
+    builtins: ['Object', 'String', 'int', 'double', 'num', 'bool', 'List', 'Map', 'Set', 'Iterable', 'Future', 'Stream', 'Function', 'Type', 'dynamic', 'void', 'Null', 'Never', 'print', 'main', 'stdin', 'stdout', 'stderr', 'exit'],
+    strings: true,
+    comments: true,
+  },
+  ex: {
+    keywords: ['after', 'and', 'case', 'catch', 'cond', 'def', 'defp', 'defmodule', 'defprotocol', 'defstruct', 'defmacro', 'defmacrop', 'defdelegate', 'defexception', 'defimpl', 'defoverridable', 'do', 'else', 'end', 'fn', 'for', 'if', 'import', 'in', 'not', 'or', 'quote', 'raise', 'receive', 'require', 'rescue', 'try', 'unless', 'unquote', 'unquote_splicing', 'use', 'when', 'with'],
+    builtins: ['true', 'false', 'nil', 'self', '__MODULE__', '__DIR__', '__ENV__', '__CALLER__', 'hd', 'tl', 'length', 'elem', 'put_elem', 'is_atom', 'is_binary', 'is_boolean', 'is_float', 'is_integer', 'is_list', 'is_map', 'is_nil', 'is_number', 'is_pid', 'is_port', 'is_reference', 'is_tuple', 'abs', 'ceil', 'floor', 'round', 'max', 'min', 'inspect', 'to_string', 'to_charlist', 'to_atom', 'to_existing_atom', 'to_float', 'to_integer', 'io', 'enum', 'map', 'list', 'tuple', 'keyword', 'mapset', 'string', 'regex', 'file', 'path', 'system', 'logger'],
+    strings: true,
+    comments: true,
+  },
+  elixir: { keywords: ['after', 'and', 'case', 'catch', 'cond', 'def', 'defp', 'defmodule', 'defprotocol', 'defstruct', 'defmacro', 'defmacrop', 'defdelegate', 'defexception', 'defimpl', 'defoverridable', 'do', 'else', 'end', 'fn', 'for', 'if', 'import', 'in', 'not', 'or', 'quote', 'raise', 'receive', 'require', 'rescue', 'try', 'unless', 'unquote', 'unquote_splicing', 'use', 'when', 'with'], builtins: ['true', 'false', 'nil', 'self', '__MODULE__', '__DIR__', '__ENV__', '__CALLER__', 'hd', 'tl', 'length', 'elem', 'put_elem', 'is_atom', 'is_binary', 'is_boolean', 'is_float', 'is_integer', 'is_list', 'is_map', 'is_nil', 'is_number', 'is_pid', 'is_port', 'is_reference', 'is_tuple', 'abs', 'ceil', 'floor', 'round', 'max', 'min', 'inspect', 'to_string'], strings: true, comments: true },
+  erlang: {
+    keywords: ['after', 'and', 'andalso', 'band', 'begin', 'bnot', 'bor', 'bsl', 'bsr', 'bxor', 'case', 'catch', 'cond', 'div', 'end', 'fun', 'if', 'let', 'letrec', 'not', 'of', 'or', 'orelse', 'receive', 'rem', 'try', 'when'],
+    builtins: ['true', 'false', 'nil', 'self', 'node', 'nodes', 'is_atom', 'is_binary', 'is_boolean', 'is_float', 'is_function', 'is_integer', 'is_list', 'is_map', 'is_pid', 'is_port', 'is_reference', 'is_tuple', 'abs', 'element', 'hd', 'tl', 'length', 'map_size', 'max', 'min', 'round', 'self', 'size', 'sound', 'trunc', 'float', 'binary_to_list', 'list_to_binary', 'term_to_binary', 'binary_to_term'],
+    strings: true,
+    comments: true,
+  },
+  haskell: {
+    keywords: ['case', 'class', 'data', 'default', 'deriving', 'do', 'else', 'family', 'foreign', 'if', 'import', 'in', 'infix', 'infixl', 'infixr', 'instance', 'let', 'module', 'newtype', 'of', 'qualified', 'then', 'type', 'where'],
+    builtins: ['True', 'False', 'Nothing', 'Just', 'Left', 'Right', 'IO', 'Maybe', 'Either', 'String', 'Int', 'Integer', 'Float', 'Double', 'Char', 'Bool', 'Ordering', 'Word', 'Int8', 'Int16', 'Int32', 'Int64', 'Word8', 'Word16', 'Word32', 'Word64', 'print', 'putStrLn', 'putStr', 'getLine', 'read', 'show', 'map', 'filter', 'foldl', 'foldr', 'length', 'head', 'tail', 'last', 'init', 'reverse', 'zip', 'zipWith', 'unzip', 'concat', 'concatMap', 'maximum', 'minimum', 'sum', 'product', 'elem', 'notElem', 'repeat', 'replicate', 'cycle', 'take', 'drop', 'splitAt', 'takeWhile', 'dropWhile', 'span', 'break', 'and', 'or', 'any', 'all', 'iterate', 'foldl1', 'foldr1', 'scanl', 'scanr', 'iterate', 'mapM', 'mapM_', 'sequence', 'sequence_', 'return', '>>=', '>>'],
+    strings: true,
+    comments: true,
+  },
+  scala: {
+    keywords: ['abstract', 'case', 'catch', 'class', 'def', 'do', 'else', 'extends', 'false', 'final', 'finally', 'for', 'forSome', 'if', 'implicit', 'import', 'lazy', 'match', 'new', 'null', 'object', 'override', 'package', 'private', 'protected', 'return', 'sealed', 'super', 'this', 'throw', 'trait', 'true', 'try', 'type', 'val', 'var', 'while', 'with', 'yield'],
+    builtins: ['Any', 'AnyRef', 'AnyVal', 'Boolean', 'Byte', 'Char', 'Double', 'Float', 'Int', 'Long', 'Nothing', 'Null', 'Object', 'Short', 'String', 'Unit', 'List', 'Map', 'Set', 'Option', 'Some', 'None', 'Either', 'Left', 'Right', 'Nil', 'Cons', 'Seq', 'Vector', 'Array', 'println', 'print', 'readLine', 'readInt', 'readDouble'],
+    strings: true,
+    comments: true,
+  },
+  clojure: {
+    keywords: ['def', 'defn', 'defn-', 'defmacro', 'defonce', 'defmulti', 'defmethod', 'defprotocol', 'defrecord', 'deftype', 'defimpl', 'let', 'letfn', 'if', 'when', 'when-not', 'if-let', 'if-not', 'cond', 'condp', 'case', 'for', 'doseq', 'dotimes', 'while', 'loop', 'recur', 'fn', 'fn*', 'partial', 'comp', 'juxt', 'apply', 'map', 'filter', 'reduce', 'some', 'every?', 'not-every?', 'not-any?', 'and', 'or', 'not', 'true', 'false', 'nil'],
+    builtins: ['println', 'print', 'pr', 'prn', 'str', 'read', 'read-line', 'slurp', 'spit', 'eval', 'load-file', 'require', 'use', 'import', 'ns', 'in-ns', 'refer', 'alias', 'intern', 'resolve', 'var', 'atom', 'ref', 'agent', 'swap!', 'reset!', 'send', 'send-off', 'await', 'await-for', 'future', 'delay', 'pmap', 'pcalls', 'pvalues', 'lein', 'clj', 'clojure.core', 'clojure.string', 'clojure.java.io', 'clojure.set', 'clojure.walk'],
+    strings: true,
+    comments: true,
+  },
+  r: {
+    keywords: ['function', 'if', 'else', 'repeat', 'while', 'for', 'in', 'next', 'break', 'return', 'TRUE', 'FALSE', 'NULL', 'Inf', 'NaN', 'NA', 'NA_integer_', 'NA_real_', 'NA_complex_', 'NA_character_', 'library', 'require', 'source', 'invisible', 'on.exit', 'stop', 'warning', 'message', 'tryCatch', 'try', 'with', 'within', 'switch', 'match.arg', 'missing', 'is.null', 'is.na', 'is.character', 'is.numeric', 'is.logical', 'is.function', 'is.list', 'is.data.frame', 'is.vector', 'is.matrix', 'is.array', 'is.factor', 'is.environment', 'is.primitive', 'is.builtin'],
+    builtins: ['c', 'list', 'data.frame', 'matrix', 'array', 'factor', 'vector', 'logical', 'integer', 'double', 'complex', 'character', 'raw', 'environment', 'new.env', 'parent.env', 'ls', 'rm', 'get', 'assign', 'exists', 'cat', 'print', 'format', 'paste', 'paste0', 'sprintf', 'nchar', 'substr', 'substring', 'strsplit', 'grep', 'grepl', 'sub', 'gsub', 'tolower', 'toupper', 'trimws', 'nrow', 'ncol', 'dim', 'length', 'names', 'rownames', 'colnames', 'head', 'tail', 'which', 'seq', 'seq_along', 'seq_len', 'rep', 'rev', 'sort', 'order', 'rank', 'duplicated', 'unique', 'table', 'table', 'table', 'aggregate', 'by', 'tapply', 'apply', 'sapply', 'lapply', 'vapply', 'mapply', 'Reduce', 'Filter', 'Find', 'Map', 'Negate', 'Position', 'Do.call', 'Recall', 'sys.call', 'sys.frame', 'sys.nframe', 'sys.function', 'sys.parent', 'sys.call', 'match.call', 'formals', 'body', 'args', 'alist', 'expression', 'quote', 'bquote', 'substitute', 'eval', 'eval.parent', 'local', 'globalenv', 'baseenv', 'emptyenv', 'parent.frame', 'sys.source', 'source'],
+    strings: true,
+    comments: true,
+  },
+  matlab: {
+    keywords: ['function', 'end', 'if', 'elseif', 'else', 'for', 'while', 'switch', 'case', 'otherwise', 'try', 'catch', 'return', 'break', 'continue', 'clear', 'clc', 'close', 'all', 'global', 'persistent', 'nargin', 'nargout', 'varargin', 'varargout', 'inputname', 'mfilename', 'dbstack', 'dbstop', 'dbclear', 'dbcont', 'dbquit', 'whos', 'who', 'what', 'which', 'help', 'lookfor', 'doc', 'docsearch', 'type', 'exist', 'isvarname', 'iskeyword', 'isletter', 'isspace', 'isnan', 'isinf', 'isfinite', 'isempty', 'isequal', 'ischar', 'isnumeric', 'islogical', 'isstruct', 'iscell', 'iscellstr', 'isfield', 'isa', 'class', 'size', 'length', 'numel', 'ndims', 'find', 'sort', 'sortrows', 'unique', 'ismember', 'setdiff', 'intersect', 'union', 'setxor', 'ismember', 'issorted', 'flip', 'fliplr', 'flipud', 'rot90', 'transpose', 'ctranspose', 'repmat', 'reshape', 'repelem', 'repmat', 'padarray', 'circshift', 'shiftdim', 'permute', 'ipermute', 'transpose', 'bsxfun', 'arrayfun', 'cellfun', 'structfun', 'spfun', 'blkdiag', 'diag', 'triu', 'tril', 'eye', 'ones', 'zeros', 'nan', 'inf', 'eps', 'pi', 'realmin', 'realmax', 'intmax', 'intmin', 'flintmax', 'bitmax', 'eps', 'ans', 'nargin', 'nargout', 'varargin', 'varargout'],
+    builtins: ['zeros', 'ones', 'eye', 'rand', 'randn', 'linspace', 'logspace', 'loglog', 'semilogx', 'semilogy', 'plot', 'bar', 'hist', 'histogram', 'scatter', 'stem', 'area', 'pie', 'errorbar', 'boxplot', 'contour', 'contourf', 'surf', 'mesh', 'waterfall', 'image', 'imagesc', 'pcolor', 'quiver', 'arrow', 'annotation', 'title', 'xlabel', 'ylabel', 'zlabel', 'legend', 'axis', 'axis equal', 'axis tight', 'grid', 'box', 'hold on', 'hold off', 'subplot', 'figure', 'axes', 'xlabel', 'ylabel', 'gca', 'gcf', 'set', 'get', 'findobj', 'delete', 'close', 'open', 'save', 'load', 'addpath', 'rmpath', 'genpath', 'path', 'cd', 'pwd', 'dir', 'mkdir', 'rmdir', 'copyfile', 'movefile', 'delete', 'exist', 'isdir', 'what', 'who', 'whos', 'clear', 'clc', 'dbclear', 'dbstop', 'dbcont', 'dbquit', 'dbstack', 'dbstatus', 'error', 'warning', 'message', 'disp', 'fprintf', 'printf', 'sprintf', 'input', 'keyboard', 'nargin', 'nargout', 'varargin', 'varargout'],
+    strings: true,
+    comments: true,
+  },
+  m: {
+    keywords: ['function', 'end', 'if', 'elseif', 'else', 'for', 'while', 'switch', 'case', 'otherwise', 'try', 'catch', 'return', 'break', 'continue', 'clear', 'clc', 'close', 'all', 'global', 'persistent'],
+    builtins: ['zeros', 'ones', 'eye', 'rand', 'randn', 'linspace', 'logspace', 'plot', 'bar', 'hist', 'scatter', 'stem', 'figure', 'subplot', 'title', 'xlabel', 'ylabel', 'legend', 'grid', 'axis', 'hold', 'set', 'get', 'disp', 'fprintf', 'sprintf', 'input', 'keyboard', 'nargin', 'nargout'],
+    strings: true,
+    comments: true,
+  },
+  cmake: {
+    keywords: ['cmake_minimum_required', 'project', 'set', 'option', 'if', 'elseif', 'else', 'endif', 'while', 'endwhile', 'foreach', 'endforeach', 'function', 'endfunction', 'macro', 'endmacro', 'return', 'break', 'continue', 'find_package', 'find_library', 'find_path', 'find_file', 'find_program', 'include_directories', 'target_include_directories', 'link_directories', 'target_link_directories', 'add_executable', 'add_library', 'target_link_libraries', 'add_custom_command', 'add_custom_target', 'install', 'export', 'configure_file', 'file', 'string', 'math', 'list', 'message', 'status', 'warning', 'author_warning', 'send_error', 'error', 'fatal_error', 'deprecated', 'try_compile', 'try_run', 'include', 'include_guard', 'cmake_policy', 'cmake_minimum_required'],
+    builtins: ['CMAKE_SOURCE_DIR', 'CMAKE_BINARY_DIR', 'CMAKE_CURRENT_SOURCE_DIR', 'CMAKE_CURRENT_BINARY_DIR', 'CMAKE_INSTALL_PREFIX', 'CMAKE_BUILD_TYPE', 'CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER', 'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_EXE_LINKER_FLAGS', 'CMAKE_SHARED_LINKER_FLAGS', 'CMAKE_STATIC_LINKER_FLAGS', 'PROJECT_SOURCE_DIR', 'PROJECT_BINARY_DIR', 'PROJECT_NAME', 'CMAKE_C_STANDARD', 'CMAKE_CXX_STANDARD', 'CMAKE_C_STANDARD_REQUIRED', 'CMAKE_CXX_STANDARD_REQUIRED', 'TRUE', 'FALSE', 'ON', 'OFF', 'YES', 'NO', 'NOT', 'AND', 'OR', 'DEFINED', 'EXISTS', 'IS_DIRECTORY', 'IS_FILE', 'IS_ABSOLUTE', 'MATCHES', 'STREQUAL', 'EQUAL', 'LESS', 'GREATER', 'STRLESS', 'STRGREATER', 'VERSION_LESS', 'VERSION_GREATER'],
+    strings: true,
+    comments: true,
+  },
+  makefile: {
+    keywords: ['include', 'ifneq', 'ifeq', 'ifdef', 'ifndef', 'endif', 'else', 'define', 'endef', 'override', 'export', 'unexport', 'vpath', 'export', 'define', 'endef', 'TARGETS', 'PHONY', 'DEFAULT', 'ALL', 'CLEAN', 'DISTCLEAN', 'INSTALL', 'UNINSTALL', 'TEST', 'CHECK'],
+    builtins: ['MAKE', 'MAKEFLAGS', 'MAKECMDGOALS', 'CURDIR', 'MAKEFILE_LIST', 'MAKE_RESTARTS', 'MAKE_VERSION', 'SHELL', 'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'LDLIBS', 'AR', 'ARFLAGS', 'RANLIB', 'INSTALL', 'INSTALL_DATA', 'INSTALL_PROGRAM', 'INSTALL_SCRIPT', 'RM', 'CP', 'MV', 'LN', 'MKDIR', 'CHMOD', 'CHOWN', 'TOUCH', 'CAT', 'ECHO', 'PRINTF', 'TEST', 'SLEEP', 'DATE', 'SORT', 'UNIQ', 'FIND', 'GREP', 'SED', 'AWK', 'XARGS', 'TAR', 'ZIP', 'GZIP', 'BZIP2', 'XZ', 'CURL', 'WGET', 'GIT', 'HG', 'SVN', 'PATCH', 'DIFF', 'PATCH', 'MAKE', 'CMAKE', 'NINJA'],
+    strings: true,
+    comments: true,
+  },
+  dockerfile: {
+    keywords: ['FROM', 'RUN', 'CMD', 'LABEL', 'EXPOSE', 'ENV', 'ADD', 'COPY', 'ENTRYPOINT', 'VOLUME', 'USER', 'WORKDIR', 'ARG', 'ONBUILD', 'STOPSIGNAL', 'HEALTHCHECK', 'SHELL'],
+    builtins: ['true', 'false', 'null'],
+    strings: true,
+    comments: true,
+  },
+  docker: {
+    keywords: ['FROM', 'RUN', 'CMD', 'LABEL', 'EXPOSE', 'ENV', 'ADD', 'COPY', 'ENTRYPOINT', 'VOLUME', 'USER', 'WORKDIR', 'ARG', 'ONBUILD', 'STOPSIGNAL', 'HEALTHCHECK', 'SHELL'],
+    builtins: ['true', 'false', 'null'],
+    strings: true,
+    comments: true,
+  },
+  vim: {
+    keywords: ['if', 'elseif', 'else', 'endif', 'for', 'endfor', 'while', 'endwhile', 'function', 'endfunction', 'let', 'call', 'return', 'continue', 'break', 'try', 'catch', 'finally', 'endtry', 'throw', 'echo', 'echoerr', 'echon', 'echomsg', 'exe', 'execute', 'source', 'finish', 'unlet', 'silent', 'map', 'noremap', 'unmap', 'imap', 'inoremap', 'iunmap', 'cmap', 'cnoremap', 'cunmap', 'vmap', 'vnoremap', 'vunmap', 'nmap', 'nnoremap', 'nunmap', 'set', 'setlocal', 'setglobal', 'augroup', 'autocmd', 'au', 'command', 'delcommand', 'com', 'comclear', 'hi', 'highlight', 'syntax', 'match', 'synmatch', 'synregion', 'synkeyword', 'syncluster', 'syninclude', 'synoption', 'synoneline', 'synkeyword'],
+    builtins: ['a', 'b', 'w', 'g', 'l', 's', 't', 'v', 'w:', 'b:', 'g:', 'l:', 's:', 't:', 'v:', 'bufnr', 'bufname', 'line', 'col', 'winwidth', 'winheight', 'winbufnr', 'bufwinnr', 'winbufnr', 'getline', 'setline', 'append', 'delete', 'getbufinfo', 'getwininfo', 'gettabinfo', 'getreg', 'setreg', 'input', 'inputlist', 'inputsecret', 'inputdialog', 'confirm', 'has', 'has_key', 'empty', 'len', 'keys', 'values', 'copy', 'deepcopy', 'extend', 'insert', 'remove', 'filter', 'map', 'sort', 'reverse', 'range', 'repeat', 'string', 'nr2char', 'char2nr', 'str2nr', 'printf', 'strftime', 'localtime', 'reltime', 'reltimestr', 'matchstr', 'match', 'matchadd', 'matchaddpos', 'matchaddpos', 'matchaddpos', 'matchaddpos', 'matchaddpos', 'matchaddpos', 'matchaddpos'],
+    strings: true,
+    comments: true,
+  },
+  vimrc: { keywords: ['if', 'elseif', 'else', 'endif', 'for', 'endfor', 'while', 'endwhile', 'function', 'endfunction', 'let', 'call', 'return', 'continue', 'break', 'try', 'catch', 'finally', 'endtry', 'throw', 'echo', 'echoerr', 'echon', 'echomsg', 'exe', 'execute', 'source', 'finish', 'unlet', 'silent', 'set', 'setlocal', 'setglobal'], builtins: ['a', 'b', 'w', 'g', 'l', 's', 't', 'v', 'has', 'empty', 'len', 'keys', 'values', 'copy', 'deepcopy', 'extend', 'insert', 'remove', 'filter', 'map', 'sort', 'reverse', 'range', 'repeat', 'string', 'nr2char', 'char2nr', 'str2nr', 'printf', 'strftime', 'localtime', 'reltime', 'reltimestr'], strings: true, comments: true },
+  vimscript: { keywords: ['if', 'elseif', 'else', 'endif', 'for', 'endfor', 'while', 'endwhile', 'function', 'endfunction', 'let', 'call', 'return', 'continue', 'break', 'try', 'catch', 'finally', 'endtry', 'throw', 'echo', 'echoerr', 'echon', 'echomsg', 'exe', 'execute', 'source', 'finish', 'unlet', 'silent', 'set', 'setlocal', 'setglobal'], builtins: ['a', 'b', 'w', 'g', 'l', 's', 't', 'v', 'has', 'empty', 'len', 'keys', 'values', 'copy', 'deepcopy', 'extend', 'insert', 'remove', 'filter', 'map', 'sort', 'reverse', 'range', 'repeat', 'string', 'nr2char', 'char2nr', 'str2nr', 'printf', 'strftime', 'localtime', 'reltime', 'reltimestr'], strings: true, comments: true },
+  nix: {
+    keywords: ['let', 'in', 'if', 'then', 'else', 'with', 'rec', 'inherit', 'import', 'derivation', 'builtins', 'true', 'false', 'null', 'or', 'and', 'not', 'throw', 'assert', 'abort', 'map', 'filter', 'foldl', 'foldl', 'all', 'any', 'toString', 'fromJSON', 'toJSON', 'path', 'derivation'],
+    builtins: ['true', 'false', 'null', 'builtins', 'derivation', 'import', 'throw', 'abort', 'assert', 'map', 'filter', 'foldl', 'all', 'any', 'toString', 'fromJSON', 'toJSON', 'path', 'derivation', 'storeDir', 'currentSystem', 'nixVersion', 'nixPath', 'getEnv', 'getFlake', 'fetchTarball', 'fetchurl', 'fetchGit', 'fetchTree', 'builtins', 'builtins.fetchTarball', 'builtins.fetchurl', 'builtins.fetchGit', 'builtins.fetchTree'],
+    strings: true,
+    comments: true,
+  },
+  nixos: { keywords: ['let', 'in', 'if', 'then', 'else', 'with', 'rec', 'inherit', 'import', 'derivation', 'builtins', 'true', 'false', 'null', 'or', 'and', 'not', 'throw', 'assert', 'abort', 'map', 'filter', 'foldl', 'all', 'any', 'toString', 'fromJSON', 'toJSON', 'path', 'derivation'], builtins: ['true', 'false', 'null', 'builtins', 'derivation', 'import', 'throw', 'abort', 'assert', 'map', 'filter', 'foldl', 'all', 'any', 'toString', 'fromJSON', 'toJSON', 'path', 'derivation'], strings: true, comments: true },
 }
 
 function escapeAnsi(code: number): string {
@@ -1266,7 +1484,22 @@ function highlightLineSync(line: string, langDef: KeywordSet): string {
       break
     }
 
-    if (langDef.comments && line[i] === '#' && (langDef.keywords.includes('print') || langDef.keywords.includes('echo'))) {
+    if (langDef.comments && line[i] === '#' && line[i + 1] !== '!' && line[i + 1] !== '{') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line[i] === '-' && line[i + 1] === '-') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line[i] === ';') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line[i] === '%' && !/[a-zA-Z]/.test(line[i + 1] ?? '')) {
       result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
       break
     }
@@ -1284,6 +1517,16 @@ function highlightLineSync(line: string, langDef: KeywordSet): string {
     }
 
     if (langDef.comments && line.slice(i, i + 3) === '///') {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line.slice(i, i + 3) === '//!' && !line.slice(i, i + 4).startsWith('//!/')) {
+      result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
+      break
+    }
+
+    if (langDef.comments && line[i] === '-' && line[i + 1] === '>') {
       result.push(ANSI_FG_GRAY + line.slice(i) + ANSI_RESET)
       break
     }
@@ -1350,12 +1593,50 @@ function highlightLineSync(line: string, langDef: KeywordSet): string {
   return result.join('')
 }
 
+let _shikiSyncAvailable: boolean | null = null
+let _shikiSyncTokens: any = null
+
+async function ensureShikiSync(): Promise<boolean> {
+  if (_shikiSyncAvailable !== null) return _shikiSyncAvailable
+  try {
+    const shiki = await import("shiki")
+    _shikiSyncTokens = shiki.codeToTokens
+    _shikiSyncAvailable = true
+  } catch {
+    _shikiSyncAvailable = false
+  }
+  return _shikiSyncAvailable
+}
+
 function highlightCodeSync(code: string, lang: string, _chroma: Chroma): string[] {
   const langDef = LANGUAGE_KEYWORDS[lang]
   if (!langDef) return code.split("\n")
 
   const lines = code.split("\n")
   return lines.map(line => highlightLineSync(line, langDef))
+}
+
+async function highlightCodeWithShiki(code: string, lang: string): Promise<string[]> {
+  try {
+    const { codeToTokens } = await import("shiki")
+    const result = await codeToTokens(code, { lang: lang as any, theme: "dracula" })
+    return result.tokens.map((line: any[]) => {
+      let ansi = ""
+      for (const tok of line) {
+        if (tok.color) {
+          const r = parseInt(tok.color.slice(1, 3), 16)
+          const g = parseInt(tok.color.slice(3, 5), 16)
+          const b = parseInt(tok.color.slice(5, 7), 16)
+          ansi += `\x1b[38;2;${r};${g};${b}m${tok.content}`
+        } else {
+          ansi += tok.content
+        }
+      }
+      return ansi + "\x1b[0m"
+    })
+  } catch {
+    return code.split("\n")
+  }
 }
 
 function padRight(str: string, targetLen: number): string {
@@ -1538,7 +1819,8 @@ export function Plain(markdown: string, config?: RendererConfig): string {
 export function NewTermRenderer(...options: TermRendererOption[]): TermRenderer {
   const tr = new TermRenderer()
   for (const opt of options) {
-    opt(tr)
+    const err = opt(tr)
+    if (err) throw err
   }
   return tr
 }
