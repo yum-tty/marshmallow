@@ -517,17 +517,57 @@ const casesUpper = (s: string) => s.toUpperCase()
 const casesLower = (s: string) => s.toLowerCase()
 const casesTitle = (s: string) => s.replace(/\b\w/g, c => c.toUpperCase())
 
+const escapeReplacer = new Map<string, string>([
+  ["\\\\", "\\"],
+  ["\\`", "`"],
+  ["\\*", "*"],
+  ["\\_", "_"],
+  ["\\{", "{"],
+  ["\\}", "}"],
+  ["\\[", "["],
+  ["\\]", "]"],
+  ["\\<", "<"],
+  ["\\>", ">"],
+  ["\\(", "("],
+  ["\\)", ")"],
+  ["\\#", "#"],
+  ["\\+", "+"],
+  ["\\-", "-"],
+  ["\\.", "."],
+  ["\\!", "!"],
+  ["\\|", "|"],
+])
+
+function applyEscapeReplacer(s: string): string {
+  for (const [escaped, replacement] of escapeReplacer) {
+    s = s.split(escaped).join(replacement)
+  }
+  return s
+}
+
 export function renderText(s: string, rules: StylePrimitive): string {
   if (s.length === 0) return s
   if (/^\s+$/.test(s)) return s
   if (rules.upper != null && rules.upper) s = casesUpper(s)
   if (rules.lower != null && rules.lower) s = casesLower(s)
   if (rules.title != null && rules.title) s = casesTitle(s)
-  return styleToCaramel(rules).render(s)
+  return styleToCaramel(rules).render(applyEscapeReplacer(s))
 }
 
 export function formatToken(format: string, token: string): string {
-  return format.replace(/\{\{\.text\}\}/g, token)
+  let result = format
+
+  result = result.replace(/\{\{\s*\.text\s*\|\s*upper\s*\}\}/g, casesUpper(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*lower\s*\}\}/g, casesLower(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*title\s*\}\}/g, casesTitle(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*ToUpper\s*\}\}/g, casesUpper(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*ToLower\s*\}\}/g, casesLower(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*ToTitle\s*\}\}/g, casesUpper(token))
+  result = result.replace(/\{\{\s*\.text\s*\|\s*TrimSpace\s*\}\}/g, token.trim())
+  result = result.replace(/\{\{\s*\.text\s*\|\s*Trim\s*\}\}/g, token.trim())
+
+  result = result.replace(/\{\{\s*\.text\s*\}\}/g, token)
+  return result
 }
 
 function deepCopyStyleConfig(src: StyleConfig): StyleConfig {

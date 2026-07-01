@@ -373,7 +373,7 @@ export function parseInlineTokens(text: string): Token[] {
 
     if (rest.startsWith('\\') && pos + 1 < text.length) {
       const nextChar = text[pos + 1]!;
-      if (nextChar === '*' || nextChar === '_' || nextChar === '[' || nextChar === ']' || nextChar === '(' || nextChar === ')' || nextChar === '\\' || nextChar === '`' || nextChar === '#' || nextChar === '+' || nextChar === '-') {
+      if (nextChar === '*' || nextChar === '_' || nextChar === '[' || nextChar === ']' || nextChar === '(' || nextChar === ')' || nextChar === '\\' || nextChar === '`' || nextChar === '#' || nextChar === '+' || nextChar === '-' || nextChar === '.' || nextChar === '!' || nextChar === '|' || nextChar === '<' || nextChar === '>' || nextChar === '~' || nextChar === '^' || nextChar === '{' || nextChar === '}') {
         tokens.push({ type: 'text', content: nextChar });
         pos += 2;
         continue;

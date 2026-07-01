@@ -816,6 +816,10 @@ export class TermRenderer {
     const rows = token.children ?? []
     if (rows.length === 0) return ''
 
+    const tableLinks: TableLink[] = []
+    const tableImages: TableLink[] = []
+    this.collectTableLinks(rows, tableLinks, tableImages)
+
     const allCells: string[][] = []
     for (const row of rows) {
       const rowCells: string[] = []
@@ -893,7 +897,101 @@ export class TermRenderer {
       }
     }
 
-    return result.join("\n")
+    let tableOutput = result.join("\n")
+
+    if (!ctx.options.inlineTableLinks && (tableLinks.length > 0 || tableImages.length > 0)) {
+      tableOutput += this.renderTableLinks(tableLinks, tableImages, ctx)
+    }
+
+    return tableOutput
+  }
+
+  private collectTableLinks(rows: Token[], links: TableLink[], images: TableLink[]): void {
+    const collectFromTokens = (tokens: Token[]) => {
+      for (const t of tokens) {
+        if (t.type === 'link') {
+          links.push({
+            href: t.href ?? '',
+            title: t.title ?? '',
+            content: t.content,
+            linkType: LINK_TYPE_REGULAR,
+          })
+        } else if (t.type === 'image') {
+          images.push({
+            href: t.href ?? '',
+            title: t.title ?? '',
+            content: t.alt ?? t.content ?? '',
+            linkType: LINK_TYPE_IMAGE,
+          })
+        }
+        if (t.children) collectFromTokens(t.children)
+      }
+    }
+
+    for (const row of rows) {
+      for (const cell of row.children ?? []) {
+        const parsed = parseInlineTokens(htmlUnescape(cell.content))
+        collectFromTokens(parsed)
+      }
+    }
+  }
+
+  private renderTableLinks(links: TableLink[], images: TableLink[], ctx: RenderContext): string {
+    const cs = ctx.blockStack.current()
+    const s = ctx.options.styles
+    const parts: string[] = []
+
+    const total = links.length + images.length
+    const totalDigits = total > 0 ? String(total).length : 0
+
+    if (links.length > 0) {
+      for (let i = 0; i < links.length; i++) {
+        const link = links[i]!
+        const position = i + 1
+        const padding = Math.max(totalDigits - String(position).length, 0)
+        const paddingStr = ' '.repeat(padding)
+
+        const linkTextStyle = cascadeStyle(cs.style, s.linkText, false)
+        const linkUrlStyle = cascadeStyle(cs.style, s.link, false)
+
+        const textToken = `${paddingStr}[${position}]: ${link.content}`
+        const textRendered = styleToCaramel(linkTextStyle).render(textToken)
+
+        const [hyperlink, resetHyperlink] = makeHyperlink(link.href)
+        const linkMaxWidth = Math.max(ctx.options.wordWrap - getStringWidth(textRendered) - 1, 0)
+        const truncatedHref = truncateWithEllipsis(link.href, linkMaxWidth)
+        const hrefRendered = styleToCaramel(linkUrlStyle).render(hyperlink + truncatedHref + resetHyperlink)
+
+        parts.push(textRendered + ' ' + hrefRendered)
+      }
+    }
+
+    if (images.length > 0) {
+      if (links.length > 0) parts.push('')
+
+      for (let i = 0; i < images.length; i++) {
+        const image = images[i]!
+        const position = links.length + i + 1
+        const padding = Math.max(totalDigits - String(position).length, 0)
+        const paddingStr = ' '.repeat(padding)
+
+        const imageTextStyle = cascadeStyle(cs.style, s.imageText, false)
+        const imageUrlStyle = cascadeStyle(cs.style, s.image, false)
+
+        const textToken = `${paddingStr}[${position}]: ${image.content}`
+        const textRendered = styleToCaramel(imageTextStyle).render(textToken)
+
+        const [hyperlink, resetHyperlink] = makeHyperlink(image.href)
+        const linkMaxWidth = Math.max(ctx.options.wordWrap - getStringWidth(textRendered) - 1, 0)
+        const truncatedHref = truncateWithEllipsis(image.href, linkMaxWidth)
+        const hrefRendered = styleToCaramel(imageUrlStyle).render(hyperlink + truncatedHref + resetHyperlink)
+
+        parts.push(textRendered + ' ' + hrefRendered)
+      }
+    }
+
+    if (parts.length === 0) return ''
+    return '\n' + parts.join('\n')
   }
 
   private renderDefinitionList(token: Token, ctx: RenderContext): string {
