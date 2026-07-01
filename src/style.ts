@@ -478,7 +478,6 @@ export function cascadeStyle(parent: StyleBlock, child: StyleBlock, toBlock: boo
   const cascaded = cascadeStylePrimitive(parent, child, toBlock)
   Object.assign(s, cascaded)
   s.indent = child.indent != null ? child.indent : (toBlock ? parent.indent : null)
-  s.indentToken = child.indentToken != null ? child.indentToken : (toBlock ? parent.indentToken : null)
   s.margin = child.margin != null ? child.margin : (toBlock ? parent.margin : null)
 
   return s
