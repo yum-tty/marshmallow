@@ -1,6 +1,6 @@
-{
+﻿{
     "name":  "@yum-tty/marshmallow",
-    "version":  "0.1.2",
+    "version":  "0.1.3",
     "description":  "Markdown rendering for the terminal. A TypeScript port of Glamour for Bun.",
     "module":  "src/index.ts",
     "type":  "module",
