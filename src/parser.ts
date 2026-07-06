@@ -721,6 +721,14 @@ export function tokenize(markdown: string): Token[] {
         content: paragraphLines.join('\n'),
         children: parseInlineTokens(paragraphLines.join(' ')),
       });
+    } else {
+      // Line didn't match any block rule — treat as paragraph to avoid infinite loop
+      tokens.push({
+        type: 'paragraph',
+        content: line,
+        children: parseInlineTokens(line),
+      });
+      i++;
     }
   }
 
