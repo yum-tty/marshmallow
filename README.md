@@ -1,4 +1,4 @@
-# Cinnamon Marshmallow
+# Marshmallow
 
 <p>
     <a href="https://github.com/charmbracelet/glamour"><img src="https://img.shields.io/badge/original-glamour-blue" alt="Original Glamour"></a>
@@ -19,7 +19,7 @@ bun add github:yum-tty/marshmallow
 Or install from a specific package:
 
 ```bash
-bun add cinnamon-marshmallow
+bun add @yum-tty/marshmallow
 ```
 
 ## Quick Start
