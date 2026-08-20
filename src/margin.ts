@@ -1,9 +1,9 @@
-import { getStringWidth } from "caramel"
+import { getStringWidth } from "@yum-tty/caramel"
 
 function extractLastAnsiStyle(str: string): string {
   const matches = str.match(/\x1b\[[0-9;]*m/g)
   if (!matches || matches.length === 0) return ""
-  return matches[matches.length - 1]
+  return matches[matches.length - 1]!
 }
 
 function hasAnsiStyle(str: string): boolean {
