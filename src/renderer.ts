@@ -1,6 +1,6 @@
 declare const process: { env: Record<string, string | undefined> }
 
-import { Style, NewStyle, getStringWidth } from "caramel"
+import { Style, NewStyle, getStringWidth } from "@yum-tty/caramel"
 import { tokenize, type Token, parseInlineTokens } from "./parser"
 
 function htmlUnescape(str: string): string {

@@ -1,4 +1,4 @@
-import { Style, NewStyle } from "caramel"
+import { Style, NewStyle } from "@yum-tty/caramel"
 
 export interface StylePrimitive {
   blockPrefix?: string
